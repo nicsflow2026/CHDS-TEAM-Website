@@ -1,5 +1,7 @@
+// Admin panel API. Security: password + Telegram one-time code (2FA), server-side sessions (hashed token in DB),
+// HttpOnly + Secure + SameSite=Strict cookie, CSRF header + Origin check, rate limits, audit log.
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
-import { api, E, sb, rpc, tg, say, closeNotifs, ids, num, UID, SID, RID, clientIp, limited, hit, jsonBody, statsData, audit } from "../../lib/core.js";
+import { api, E, sb, rpc, tg, say, closeNotifs, ids, num, UID, SID, RID, clientIp, limited, hit, jsonBody, statsData, audit, aiChat, aiModels } from "../../lib/core.js";
 import { COMMANDS, parseDate } from "../../lib/bot.js";
 
 const COOKIE = "__Host-chds_admin";
@@ -79,7 +81,7 @@ export default api(async (req, res) => {
     return res.json({
       me: ses.uid, cur: E.CURRENCY || "$", stats, reports, pending: pending.length, audit: log,
       chats: chats.map(c => ({ sid: c.sid, name: c.name, status: c.status, updated_at: c.updated_at, agents: Object.values(c.joined || {}) })),
-      sys: { groq_key: !!E.GROQ_API_KEY, groq_model: E.GROQ_MODEL || "llama-3.3-70b-versatile", bot_token: !!E.BOT_TOKEN, webhook_secret: !!E.WEBHOOK_SECRET, team_uids: ids(E.ALLOWED_UIDS).size, admin_uids: ids(E.ADMIN_UIDS).size, webhook_url: wh.result?.url || "", webhook_pending: wh.result?.pending_update_count ?? null, webhook_error: wh.result?.last_error_message || "" }
+      sys: { groq_key: !!E.GROQ_API_KEY, groq_model: aiModels().join(", "), bot_token: !!E.BOT_TOKEN, webhook_secret: !!E.WEBHOOK_SECRET, team_uids: ids(E.ALLOWED_UIDS).size, admin_uids: ids(E.ADMIN_UIDS).size, webhook_url: wh.result?.url || "", webhook_pending: wh.result?.pending_update_count ?? null, webhook_error: wh.result?.last_error_message || "" }
     });
   }
 
@@ -132,17 +134,8 @@ export default api(async (req, res) => {
       return res.json({ ok: !!(w.ok && c.ok), error: w.ok ? undefined : w.description });
     }
     if (t === "test_ai") {
-      const key = (E.GROQ_API_KEY || "").trim(); if (!key) return res.json({ ok: false, detail: "GROQ_API_KEY is not set." });
-      for (const model of [...new Set([(E.GROQ_MODEL || "").trim(), "llama-3.3-70b-versatile", "llama-3.1-8b-instant"].filter(Boolean))]) {
-        try {
-          const r = await fetch("https://api.groq.com/openai/v1/chat/completions", { method: "POST", signal: AbortSignal.timeout(15000), headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" }, body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: "user", content: "Reply OK" }] }) });
-          if (r.ok) return res.json({ ok: true, detail: `Groq answered using ${model}.` });
-          const d = (await r.text()).slice(0, 160);
-          if (r.status === 401 || r.status === 403) return res.json({ ok: false, detail: `Groq rejected the API key (${r.status}). Create a new key at console.groq.com.` });
-          var last = `${model}: ${r.status} ${d}`;
-        } catch (e) { last = `${model}: ${String(e).slice(0, 100)}`; }
-      }
-      return res.json({ ok: false, detail: last || "No response." });
+      const o = await aiChat([{ role: "user", content: "Reply with the single word OK." }], { max: 40, budget: 25000 });
+      return res.json(o.ok ? { ok: true, detail: `AI answered using ${o.model}.` } : { ok: false, detail: o.detail || o.error });
     }
     return fail(400, "bad_request");
   }
