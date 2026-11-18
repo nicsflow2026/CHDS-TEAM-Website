@@ -20,14 +20,14 @@ const BD={active:"ok",approved:"ok",actual:"ok",resolved:"ok",verified:"ok",publ
 const LABEL={waiting:"Waiting for Agent",assigned:"Assigned",in_progress:"In Progress",waiting_customer:"Waiting for Customer",awaiting_confirmation:"Awaiting confirmation",handoff:"With human"};
 const badge=s=>`<span class="bd ${BD[s]??""}">${h(LABEL[s]||String(s||"—").replace(/_/g," "))}</span>`;
 
-let ME=null,route="",timers=[],idleMs=600000,last=Date.now(),pingAt=0;
+let ME=null,route="",timers=[],globalTimers=[],idleMs=600000,last=Date.now(),pingAt=0,badgeN=0,lastWaiting=null;
 
 /* ---------------- API ---------------- */
 async function api(op,body,o={}){
   const opt={credentials:"same-origin",cache:"no-store",headers:{}};
   if(body!==undefined){opt.method="POST";opt.headers["Content-Type"]="application/json";opt.headers["X-CHDS-Admin"]="1";opt.body=JSON.stringify(body)}
   let r;try{r=await fetch("/api/admin/"+op,opt)}catch{return{ok:false,status:0,j:{error:"network",message:"Network error. Check your connection."}}}
-  let j={};try{j=await r.json()}catch{}
+  let j={};try{j=await r.json()}catch(e){console.warn("Non-JSON response from",op,r.status)}
   if(r.status===401&&!/^(login|otp|reauth)/.test(op)){const was=!!ME;lock();if(was)lerr("Your session ended (inactivity, sign-out elsewhere or access change). Please sign in again.");return{ok:false,status:401,j}}
   if(r.status===428&&!o.noReauth){const ok=await reauth();if(ok)return api(op,body,{...o,noReauth:true});return{ok:false,status:428,j:{error:"reauth_cancelled",message:"Password confirmation was cancelled. Nothing was changed."}}}
   return{ok:r.ok,status:r.status,j};
@@ -35,7 +35,7 @@ async function api(op,body,o={}){
 const errText=r=>r.j&&r.j.message?r.j.message:{0:"Network error.",403:"Your role does not include this permission.",404:"Not found.",409:"This was already changed by someone else.",423:"Locked by Emergency Control.",429:"Too many requests. Please wait a moment.",503:"A required service is not configured or the database is not migrated."}[r.status]||`Request failed (${r.j&&r.j.error||r.status}).`;
 async function download(op,params){
   const r=await fetch("/api/admin/"+op+"?"+new URLSearchParams(params),{credentials:"same-origin",cache:"no-store"});
-  if(!r.ok){let j={};try{j=await r.json()}catch{}toast(errText({status:r.status,j}),"err");return}
+  if(!r.ok){let j={};try{j=await r.json()}catch(e){console.warn("Non-JSON error from",op,r.status)}toast(errText({status:r.status,j}),"err");return}
   const b=await r.blob(),cd=r.headers.get("content-disposition")||"",m=/filename="([^"]+)"/.exec(cd),a=document.createElement("a");
   a.href=URL.createObjectURL(b);a.download=m?m[1]:"export.csv";document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);toast("Export downloaded.","ok");
 }
@@ -169,7 +169,7 @@ async function go(){
   const [id,...rest]=(location.hash.replace(/^#\/?/,"")||"overview").split("/");
   const t=titleOf(id);route=t&&can(t.perm)?id:"overview";
   $$("#snav a").forEach(a=>{const on=a.dataset.nav===route;a.classList.toggle("on",on);on?a.setAttribute("aria-current","page"):a.removeAttribute("aria-current")});
-  closeSide();crumbs();document.title=(titleOf(route)?.label||"Dashboard")+" · CHDS Admin";
+  closeSide();crumbs();setTitle();
   const el=$("#main");el.innerHTML=loading();
   const v=window.ADM.views[route];
   try{await v(el,rest.map(decodeURIComponent))}catch(e){console.error(e);el.innerHTML=errorBox("This page failed to load.");$("[data-retry]",el).onclick=go}
@@ -181,14 +181,24 @@ const openSide=()=>{$("#side").classList.add("open");$("#scrim").hidden=false;$(
 /* ---------------- auth ---------------- */
 let uid="";
 const lerr=t=>{$("#lerr").textContent=t||""};
-function lock(){timers.forEach(clearInterval);timers=[];ME=null;$("#app").hidden=true;$("#login").hidden=false;$("#s1").hidden=false;$("#s2").hidden=true;lerr("");$$("dialog").forEach(d=>d.close())}
+const setTitle=()=>{document.title=(badgeN?`(${badgeN}) `:"")+(titleOf(route)?.label||"Dashboard")+" · CHDS Admin"};
+// Dashboard notifications: sidebar counters, bell indicator, title count, toast on new waiting requests.
+async function badges(){
+  const r=await api("badges?quiet=1");if(!r.ok)return;const b=r.j;
+  $$("[data-cnt]").forEach(el=>{const v=b[el.dataset.cnt]||0;el.hidden=!v;el.textContent=v>99?"99+":String(v);el.setAttribute("aria-label",v+" pending")});
+  const bell=$("#bell");bell.dataset.count=String(b.announcements||0);bell.setAttribute("aria-label",b.announcements?`Announcements (${b.announcements})`:"Announcements");
+  if(lastWaiting!==null&&(b.handoffs||0)>lastWaiting)toast(`New Human Support request waiting (${b.handoffs} in queue).`,"info");
+  lastWaiting=b.handoffs===undefined?null:b.handoffs;badgeN=(b.handoffs||0)+(b.reports||0);setTitle();
+}
+function lock(){timers.forEach(clearInterval);timers=[];globalTimers.forEach(clearInterval);globalTimers=[];ME=null;lastWaiting=null;badgeN=0;$("#app").hidden=true;$("#login").hidden=false;$("#s1").hidden=false;$("#s2").hidden=true;lerr("");$$("dialog").forEach(d=>d.close())}
 async function enter(){
   const r=await api("me");if(!r.ok){lock();return}
   ME=r.j;idleMs=ME.idle_ms||idleMs;last=Date.now();
   $("#login").hidden=true;$("#app").hidden=false;
   $("#snav").innerHTML=navHTML();$("#mename").textContent=ME.name;$("#merole").textContent=ME.role_name;$("#mav").textContent=ini(ME.name);
-  flagbar(ME.flags);go();
-  every(async()=>{const x=await api("me?quiet=1");if(x.ok){ME=x.j;flagbar(ME.flags)}},60000);
+  flagbar(ME.flags);go();badges();
+  globalTimers.push(setInterval(async()=>{if(document.hidden)return;const x=await api("me?quiet=1");if(x.ok){ME=x.j;flagbar(ME.flags)}},60000));
+  globalTimers.push(setInterval(()=>{if(!document.hidden)badges()},30000));
 }
 function flagbar(f){const on=f?Object.entries(f).filter(([,v])=>v).map(([k])=>k.replace(/_/g," ")):[];const b=$("#flagbar");b.hidden=!on.length;b.innerHTML=on.length?I("siren")+`<span><b>Emergency Control active:</b> ${h(on.join(", "))}.${has("manage_system")?` <a href="#/emergency">Review</a>`:""}</span>`:""}
 $("#s1").addEventListener("submit",async e=>{e.preventDefault();lerr("");uid=$("#uid").value.trim();
@@ -214,7 +224,7 @@ const bump=()=>{last=Date.now();if(ME&&Date.now()-pingAt>60000){pingAt=Date.now(
 setInterval(async()=>{if(ME&&Date.now()-last>idleMs){await api("logout",{});lock();lerr("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}},10000);
 addEventListener("keydown",e=>{if(e.key==="Escape")closeSide()});
 // boot: valid session cookie → straight to the dashboard
-(async()=>{const r=await fetch("/api/admin/me",{credentials:"same-origin",cache:"no-store"}).catch(()=>null);if(r&&r.ok)enter();else lock()})();
+(async()=>{const r=await fetch("/api/admin/me",{credentials:"same-origin",cache:"no-store"}).catch(e=>{console.warn("Session check failed",e);return null});if(r&&r.ok)enter();else lock()})();
 
-return{$,$$,h,I,money,moneyS,num,when,day,dur,ago,ini,badge,phToday,api,errText,download,toast,loading,empty,errorBox,page,kpis,table,pager,dlg,confirmAct,formDlg,chart,every,crumbs,has,go,me:()=>ME,views:{}};
+return{badges,$,$$,h,I,money,moneyS,num,when,day,dur,ago,ini,badge,phToday,api,errText,download,toast,loading,empty,errorBox,page,kpis,table,pager,dlg,confirmAct,formDlg,chart,every,crumbs,has,go,me:()=>ME,views:{}};
 })();

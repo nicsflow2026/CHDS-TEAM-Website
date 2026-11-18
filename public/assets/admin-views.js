@@ -237,6 +237,7 @@ V.health=async el=>{
     <div class="card"><h3>${I("archive")} Storage</h3><dl class="kv"><dt>Reachable</dt><dd>${ok(x.storage.ok)}</dd><dt>Missing buckets</dt><dd>${x.storage.missing_buckets.length?h(x.storage.missing_buckets.join(", ")):"none"}</dd>${x.storage.error?`<dt>Error</dt><dd>${h(x.storage.error)}</dd>`:""}</dl></div>
     <div class="card"><h3>${I("clock")} Background work</h3><dl class="kv"><dt>Waiting handoffs</dt><dd>${x.background.waiting_handoffs??"—"}</dd><dt>Oldest waiting</dt><dd>${x.background.oldest_waiting?ago(x.background.oldest_waiting):"—"}</dd><dt>Errors · 24 h</dt><dd>${x.errors.last_24h??"—"}</dd></dl></div></div>
     <div class="card" style="margin-top:16px"><h3>${I("alert-triangle")} Recent application errors</h3>${table([{l:"When",f:e=>when(e.at)},{l:"Route",f:e=>`<code>${h(e.route)}</code>`},{l:"Message",f:e=>h(e.message),c:"wide"}],x.errors.recent,{emptyText:"No application errors recorded."})}</div>
+    <div class="card" style="margin-top:16px"><h3>${I("server")} Environment validation</h3>${x.env.errors.length||x.env.warnings.length?`${x.env.errors.map(m=>`<p class="notice warn">${I("alert-triangle")} ${h(m)}</p>`).join("")}${x.env.warnings.map(m=>`<p class="notice">${I("info")} ${h(m)}</p>`).join("")}`:`<p class="small">All required variables are present and valid.</p>`}</div>
     <div class="card" style="margin-top:16px"><h3>${I("sliders")} Configuration checks</h3><dl class="kv"><dt>SESSION_SECRET</dt><dd>${ok(x.config.session_secret)}</dd><dt>WEBHOOK_SECRET</dt><dd>${ok(x.config.webhook_secret)}</dd><dt>ADMIN_PASSWORD</dt><dd>${x.config.admin_password?"set":"not set"}</dd><dt>APP_URL</dt><dd>${x.config.app_url?"set":"not set (dashboard links in Telegram are omitted)"}</dd></dl></div>`;
   $("[data-refresh]",el).onclick=A.go;
   $$("[data-x]",el).forEach(b=>b.onclick=async()=>{b.disabled=true;const y=await api(b.dataset.x,{});b.disabled=false;$("[data-xout]",el).textContent=y.ok?(y.j.ok?"✓ ":"✗ ")+(y.j.detail||(y.j.ok?"Telegram webhook, commands and name set.":y.j.error||"Failed")):errText(y)});
@@ -248,13 +249,13 @@ V.settings=async el=>{
   const {support:s,site,env}=r.j;
   el.innerHTML=page("System Settings","sliders","Database-backed settings take effect within seconds. Environment values are shown read-only; change them in Vercel.")+
     `<div class="grid g2"><form class="card" data-s style="display:grid;gap:10px"><h3>${I("headset")} Human Support limits</h3>
-      <label for="s1">Requests allowed before cooldown</label><input id="s1" type="number" min="1" max="20" value="${h(s.request_limit)}">
-      <label for="s2">Cooldown (minutes)</label><input id="s2" type="number" min="5" max="1440" value="${h(s.cooldown_minutes)}">
-      <label for="s3">Unsuccessful AI attempts before offering a human</label><input id="s3" type="number" min="1" max="5" value="${h(s.handoff_after_failures)}">
-      <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="s4"${site.announcement_banner?" checked":""}> Show public announcements on the website</label>
+      <label for="set_rl">Requests allowed before cooldown</label><input id="set_rl" type="number" min="1" max="20" value="${h(s.request_limit)}">
+      <label for="set_cd">Cooldown (minutes)</label><input id="set_cd" type="number" min="5" max="1440" value="${h(s.cooldown_minutes)}">
+      <label for="set_hf">Unsuccessful AI attempts before offering a human</label><input id="set_hf" type="number" min="1" max="5" value="${h(s.handoff_after_failures)}">
+      <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="set_ab"${site.announcement_banner?" checked":""}> Show public announcements on the website</label>
       <div class="ferr" role="alert"></div><button class="btn sm" type="submit" style="justify-self:start">Save settings</button></form>
     <div class="card"><h3>${I("server")} Environment (read-only)</h3><dl class="kv"><dt>Currency</dt><dd>${h(env.currency)}</dd><dt>Timezone offset</dt><dd>UTC+${h(env.tz_offset)}</dd><dt>Admin idle timeout</dt><dd>${h(env.admin_idle_min)} min</dd><dt>AUTO_APPROVE</dt><dd>${env.auto_approve?"on":"off"}</dd><dt>APP_URL</dt><dd>${h(env.app_url||"not set")}</dd><dt>AI models</dt><dd>${h(env.ai_models.join(", "))}</dd></dl></div></div>`;
-  $("[data-s]",el).addEventListener("submit",async e=>{e.preventDefault();const x=await api("settings_save",{request_limit:$("#s1").value,cooldown_minutes:$("#s2").value,handoff_after_failures:$("#s3").value,announcement_banner:$("#s4").checked});
+  $("[data-s]",el).addEventListener("submit",async e=>{e.preventDefault();const x=await api("settings_save",{request_limit:$("#set_rl").value,cooldown_minutes:$("#set_cd").value,handoff_after_failures:$("#set_hf").value,announcement_banner:$("#set_ab").checked});
     if(x.ok)toast("Settings saved.","ok");else $(".ferr",el).textContent=errText(x)});
 };
 A.qs=qs;A.opts=opts;

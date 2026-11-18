@@ -140,7 +140,7 @@ const call=async(path,body,method)=>{
   const o={method:method||(body!==undefined?"POST":"GET"),credentials:"same-origin",cache:"no-store",headers:{"X-CHDS-Client":"1"}};
   if(body!==undefined){o.headers["Content-Type"]="application/json";o.body=JSON.stringify(body)}
   let r;try{r=await fetch(API+path,o)}catch{return{ok:false,status:0,j:{error:"network"}}}
-  let j={};try{j=await r.json()}catch{}
+  let j={};try{j=await r.json()}catch(e){console.warn("Non-JSON response from",path,r.status)}
   return{ok:r.ok,status:r.status,j};
 };
 const fab=document.createElement("button");fab.id="fab";fab.type="button";fab.setAttribute("aria-label","Open CHDS AI Support chat");fab.setAttribute("aria-expanded","false");fab.setAttribute("aria-controls","chat");fab.innerHTML=I("message-square");
@@ -279,7 +279,7 @@ function setMode(m){
   $("#chips").innerHTML=m==="ai"?$("#chips").innerHTML:"";
   $("#ci").placeholder=m==="ai"?"Type your message…":m==="wait"?"Add details while you wait…":"Message the CHDS agent…";
 }
-const markLive=on=>{try{on?sessionStorage.setItem("chds_live",S.conv.id):sessionStorage.removeItem("chds_live")}catch{}};
+const markLive=on=>{try{on?sessionStorage.setItem("chds_live",S.conv.id):sessionStorage.removeItem("chds_live")}catch(e){console.warn("sessionStorage unavailable: an open human chat will not follow you to other pages",e)}};
 function offerHuman(reason,why){
   if(!FLAGS.human_enabled)return;
   S.offerReason=reason||S.offerReason||"user_requested";
@@ -428,7 +428,7 @@ function leave(waiting){
 }
 
 // A Human Support chat that was open on another page keeps receiving agent messages here.
-try{const live=sessionStorage.getItem("chds_live");if(live)(async()=>{const r=await call("/api/ai/me");if(r.ok&&r.j.identity){FLAGS=r.j.flags||FLAGS;S.me=r.j.identity;S.convs=r.j.conversations||[];S.loaded=true;await loadConv(live)}})()}catch{}
+try{const live=sessionStorage.getItem("chds_live");if(live)(async()=>{const r=await call("/api/ai/me");if(r.ok&&r.j.identity){FLAGS=r.j.flags||FLAGS;S.me=r.j.identity;S.convs=r.j.conversations||[];S.loaded=true;await loadConv(live)}})()}catch(e){console.warn("Could not resume the human chat",e)}
 
 watch();
 })();
