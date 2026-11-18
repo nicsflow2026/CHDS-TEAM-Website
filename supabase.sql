@@ -1313,7 +1313,9 @@ returns jsonb language sql stable as $$
            coalesce((select sum(amount) from inr where inr.mkey = m.mkey and status = 'pending'), 0) as pending,
            coalesce((select sum(recovered) from rep where rep.mkey = m.mkey and status = 'approved'), 0) as recovered,
            (select count(*) from rep where rep.mkey = m.mkey) as reports,
-           (select count(*) from rep where rep.mkey = m.mkey and status = 'approved') as approved_reports
+           (select count(*) from rep where rep.mkey = m.mkey and status = 'approved') as approved_reports,
+           (select count(*) from rep where rep.mkey = m.mkey and status in ('pending','reviewed')) as open_reports,
+           (select count(*) from rep where rep.mkey = m.mkey and status = 'rejected') as rejected_reports
       from members m
   ), tot as (select coalesce(sum(amount) filter (where status = 'actual'), 0) as actual from inr),
   active_n as (select count(*) as n from public.team_members where status = 'active' and deleted_at is null and (p_members is null or id = any(p_members)))
@@ -1343,7 +1345,7 @@ returns jsonb language sql stable as $$
                sum(amount) filter (where status = 'pending') as pd
           from inr group by 1) s), '[]'::jsonb),
     'members', coalesce((select jsonb_agg(jsonb_build_object('key', mkey, 'name', name, 'status', member_status, 'actual', actual, 'pending', pending,
-                 'recovered', recovered, 'reports', reports, 'approved_reports', approved_reports,
+                 'recovered', recovered, 'reports', reports, 'approved_reports', approved_reports, 'open_reports', open_reports, 'rejected_reports', rejected_reports,
                  'contribution', case when (select actual from tot) > 0 then round(actual * 100 / (select actual from tot), 2) else 0 end)
                  order by actual desc, name) from per), '[]'::jsonb)
   )

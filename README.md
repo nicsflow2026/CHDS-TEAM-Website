@@ -25,10 +25,10 @@ TEST_REPORT.md     what was executed, results, and what still needs live credent
 ```
 
 ## Scripts
-`npm run check` · `npm test` · `npm run dev` (real env) · `node scripts/dev-server.mjs --fake` (test double) · `python3 tests/visual/run_visual.py` (with the fake server running) · `npm run build:sql`
+`npm run check` · `npm run check:env` · `npm test` · `npm run dev` (real env) · `node scripts/dev-server.mjs --fake` (test double) · `python3 tests/visual/run_visual.py` (with the fake server running) · `npm run build:sql`
 
 ## Design
 Midnight Blue / Electric Blue: background `#080D18`, secondary `#0D1526`, sidebar `#0A1221`, cards `#111D32` / `#17243B`, accent `#3B82F6` / `#60A5FA` / `#2563EB`, text `#F8FAFC` / `#A5B4C7` / `#718096`, borders `#22314A`, success `#22C55E`, warning `#F59E0B`, danger `#EF4444`, info `#38BDF8`. Fonts: Inter (body), Manrope (headings), Geist as fallback. Icons: Lucide geometry, inlined. Reduced-motion supported.
 
 ## Documentation
-[Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) · [Security](docs/SECURITY.md) · [Features](docs/FEATURES.md) · [Backup & recovery](docs/BACKUP_AND_RECOVERY.md) · [Testing](docs/TESTING.md) · [Upgrade notes & behaviour changes](docs/UPGRADE_NOTES.md) · [Test report](TEST_REPORT.md)
+[Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) · [Security](docs/SECURITY.md) · [Features](docs/FEATURES.md) · [Backup & recovery](docs/BACKUP_AND_RECOVERY.md) · [Testing](docs/TESTING.md) · [Upgrade notes & behaviour changes](docs/UPGRADE_NOTES.md) · [**upgrade.txt compliance checklist**](docs/SPEC_COMPLIANCE.md) · [Test report](TEST_REPORT.md)
