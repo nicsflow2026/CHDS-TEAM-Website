@@ -45,6 +45,7 @@ const handler = async (req, res) => {
       if (!(await hit("sec-forbid:" + ses.uid, 20, 3600))) await securityEvent("forbidden", { severity: "warning", actor: ses.uid, req, detail: { op: a, needs: op.perm } });
       return fail(403, "forbidden", "Your role does not include this permission.");
     }
+    if (await hit("adm:" + ses.uid, 600, 60)) return fail(429, "rate_limited"); // every authenticated request
     if (post && (await hit("adm-w:" + ses.uid, 120, 60))) return fail(429, "rate_limited");
     if (op.reauth && !ses.reauthOk) return fail(428, "reauth_required", "Confirm your password to continue.");
     const ctx = { req, res, b, qy: req.query || {}, ses, p: ses.p, idle: IDLE(),
