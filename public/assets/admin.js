@@ -1,132 +1,220 @@
 "use strict";
-(()=>{
-const $=(s,r=document)=>r.querySelector(s);
-const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let D=null,uid="",tab="overview",filter="all",chatSid="",chatMsgs=[],timer=0,note="",idleMs=600000,last=Date.now(),pingAt=0;
-const money=n=>(D?D.cur:"₱")+Number(n).toLocaleString("en-US",{maximumFractionDigits:2});
-const when=t=>t?new Date(t).toLocaleString():"";
-const show=(id,on)=>$(id).classList.toggle("hide",!on);
-const err=t=>{$("#err").textContent=t||""};
+/* CHDS admin dashboard — core (API client, UI kit, router, auth). Views live in admin-views.js.
+   Every permission is enforced by the API; this file only hides what the API would refuse anyway. */
+window.ADM=(()=>{
+const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
+const h=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const I=(n,c)=>window.CHDSIcon(n,c);
+const money=n=>n===null||n===undefined||n===""?"—":"₱"+Number(n).toLocaleString("en-PH",{minimumFractionDigits:2,maximumFractionDigits:2});
+const moneyS=n=>n===null||n===undefined?"—":"₱"+Number(n).toLocaleString("en-PH",{maximumFractionDigits:0});
+const num=n=>n===null||n===undefined?"—":Number(n).toLocaleString("en-PH");
+const when=t=>t?new Date(t).toLocaleString("en-PH",{timeZone:"Asia/Manila",year:"numeric",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):"—";
+const day=t=>t?new Date(String(t).length===10?t+"T00:00:00+08:00":t).toLocaleDateString("en-PH",{timeZone:"Asia/Manila",year:"numeric",month:"short",day:"numeric"}):"—";
+const dur=s=>s===null||s===undefined?"—":s<60?Math.round(s)+"s":s<3600?Math.round(s/60)+" min":s<86400?(s/3600).toFixed(1)+" h":(s/86400).toFixed(1)+" d";
+const ago=t=>{if(!t)return"—";const s=(Date.now()-Date.parse(t))/1e3;return s<60?"just now":s<3600?Math.floor(s/60)+"m ago":s<86400?Math.floor(s/3600)+"h ago":Math.floor(s/86400)+"d ago"};
+const ini=s=>String(s||"?").split(/\s+/).map(w=>w[0]||"").join("").slice(0,2).toUpperCase();
+const phToday=()=>new Date(Date.now()+8*36e5).toISOString().slice(0,10);
+const BD={active:"ok",approved:"ok",actual:"ok",resolved:"ok",verified:"ok",published:"ok",sent:"ok",live:"ok",completed:"ok",
+  pending:"wa",reviewed:"in",projected:"in",waiting:"wa",awaiting_confirmation:"wa",assigned:"in",in_progress:"in",waiting_customer:"wa",handoff:"wa",draft:"",wait:"wa",running:"in",
+  rejected:"no",suspended:"wa",banned:"no",blocked:"no",cancelled:"no",failed:"no",closed:"",ended:"",archived:"",inactive:"wa",removed:"no"};
+const LABEL={waiting:"Waiting for Agent",assigned:"Assigned",in_progress:"In Progress",waiting_customer:"Waiting for Customer",awaiting_confirmation:"Awaiting confirmation",handoff:"With human"};
+const badge=s=>`<span class="bd ${BD[s]??""}">${h(LABEL[s]||String(s||"—").replace(/_/g," "))}</span>`;
 
-async function call(path,body){
-  const o={credentials:"same-origin",cache:"no-store",headers:{}};
-  if(body!==undefined){o.method="POST";o.headers["Content-Type"]="application/json";o.headers["X-CHDS-Admin"]="1";o.body=JSON.stringify(body)}
-  let r;try{r=await fetch("/api/admin/"+path,o)}catch{return{ok:false,status:0,j:{}}}
+let ME=null,route="",timers=[],idleMs=600000,last=Date.now(),pingAt=0;
+
+/* ---------------- API ---------------- */
+async function api(op,body,o={}){
+  const opt={credentials:"same-origin",cache:"no-store",headers:{}};
+  if(body!==undefined){opt.method="POST";opt.headers["Content-Type"]="application/json";opt.headers["X-CHDS-Admin"]="1";opt.body=JSON.stringify(body)}
+  let r;try{r=await fetch("/api/admin/"+op,opt)}catch{return{ok:false,status:0,j:{error:"network",message:"Network error. Check your connection."}}}
   let j={};try{j=await r.json()}catch{}
-  if(r.status===401&&!/^(login|otp)/.test(path)){const was=!!D;lock();if(was)err("Session expired after inactivity. Please sign in again.")}
+  if(r.status===401&&!/^(login|otp|reauth)/.test(op)){const was=!!ME;lock();if(was)lerr("Your session ended (inactivity, sign-out elsewhere or access change). Please sign in again.");return{ok:false,status:401,j}}
+  if(r.status===428&&!o.noReauth){const ok=await reauth();if(ok)return api(op,body,{...o,noReauth:true});return{ok:false,status:428,j:{error:"reauth_cancelled",message:"Password confirmation was cancelled. Nothing was changed."}}}
   return{ok:r.ok,status:r.status,j};
 }
-function lock(){clearInterval(timer);D=null;show("#app",false);show("#login",true);show("#s1",true);show("#s2",false);err("")}
+const errText=r=>r.j&&r.j.message?r.j.message:{0:"Network error.",403:"Your role does not include this permission.",404:"Not found.",409:"This was already changed by someone else.",423:"Locked by Emergency Control.",429:"Too many requests. Please wait a moment.",503:"A required service is not configured or the database is not migrated."}[r.status]||`Request failed (${r.j&&r.j.error||r.status}).`;
+async function download(op,params){
+  const r=await fetch("/api/admin/"+op+"?"+new URLSearchParams(params),{credentials:"same-origin",cache:"no-store"});
+  if(!r.ok){let j={};try{j=await r.json()}catch{}toast(errText({status:r.status,j}),"err");return}
+  const b=await r.blob(),cd=r.headers.get("content-disposition")||"",m=/filename="([^"]+)"/.exec(cd),a=document.createElement("a");
+  a.href=URL.createObjectURL(b);a.download=m?m[1]:"export.csv";document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);toast("Export downloaded.","ok");
+}
 
-/* ---------- enter dashboard / auto sign-in / idle timeout ---------- */
+/* ---------------- UI kit ---------------- */
+function toast(msg,kind="info"){const d=document.createElement("div");d.className="toast "+kind;d.setAttribute("role",kind==="err"?"alert":"status");d.innerHTML=I(kind==="ok"?"circle-check":kind==="err"?"alert-triangle":"info")+`<span>${h(msg)}</span>`;$("#toasts").appendChild(d);setTimeout(()=>d.remove(),kind==="err"?7000:4000)}
+const loading=(n=4)=>`<div class="card" aria-busy="true" aria-label="Loading">${'<div class="skel"></div>'.repeat(n)}</div>`;
+const empty=(t,icon="inbox")=>`<div class="state">${I(icon)}<span>${h(t)}</span></div>`;
+const errorBox=(t)=>`<div class="state err" role="alert">${I("alert-triangle")}<span>${h(t)}</span><button class="btn ghost sm" type="button" data-retry>${I("refresh")} Try again</button></div>`;
+function page(title,icon,desc,actions=""){return`<div class="phd"><div><h1>${I(icon)} ${h(title)}</h1>${desc?`<p>${desc}</p>`:""}</div><div class="acts">${actions}</div></div>`}
+function kpis(list){return`<div class="kpis">${list.filter(Boolean).map(k=>`<div class="kpi"><span>${I(k.i||"activity")} ${h(k.l)}</span><b>${k.v}</b>${k.s?`<small>${k.s}</small>`:""}</div>`).join("")}</div>`}
+// cols: [{l:label, f:row=>html, c:"num"|"wide"}]
+function table(cols,rows,{click,emptyText="No records match these filters."}={}){
+  if(!rows||!rows.length)return`<div class="tw">${empty(emptyText)}</div>`;
+  return`<div class="tw"><table class="rt"><thead><tr>${cols.map(c=>`<th class="${c.c||""}" scope="col">${h(c.l)}</th>`).join("")}</tr></thead><tbody>${rows.map((r,i)=>`<tr${click?` class="click" data-row="${i}" tabindex="0"`:""}>${cols.map(c=>`<td class="${c.c||""}" data-label="${h(c.l)}">${c.f(r)??""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function pager(total,offset,limit){if(total<=limit&&!offset)return"";const a=offset+1,b=Math.min(total,offset+limit);
+  return`<div class="pager"><span>${num(a)}–${num(b)} of ${num(total)}</span><button class="btn ghost sm" type="button" data-pg="${Math.max(0,offset-limit)}" ${offset?"":"disabled"} aria-label="Previous page">${I("chevron-left")}</button><button class="btn ghost sm" type="button" data-pg="${offset+limit}" ${b<total?"":"disabled"} aria-label="Next page">${I("chevron-right")}</button></div>`}
+function dlg(html,{drawer=false,label="Dialog"}={}){
+  const d=document.createElement("dialog");if(drawer)d.className="drawer";d.setAttribute("aria-label",label);d.innerHTML=html;document.body.appendChild(d);
+  d.addEventListener("close",()=>d.remove());d.addEventListener("click",e=>{if(e.target===d)d.close()});d.showModal();return d;
+}
+// Confirmation with optional required reason. Resolves {reason} or null.
+function confirmAct({title,text,confirm="Confirm",danger=false,reason=false,reasonLabel="Reason",typed=null}){
+  return new Promise(res=>{
+    const d=dlg(`<form method="dialog" novalidate><h2>${h(title)}</h2><p class="small" style="font-size:13.5px">${text||""}</p>
+      ${reason?`<div class="fld"><label for="cr">${h(reasonLabel)} (required)</label><textarea id="cr" maxlength="500" required></textarea></div>`:""}
+      ${typed?`<div class="fld"><label for="ct">Type <b>${h(typed)}</b> to confirm</label><input id="ct" autocomplete="off"></div>`:""}
+      <div class="ferr" role="alert"></div><div class="dacts"><button class="btn ghost" value="cancel" type="button" data-c>Cancel</button><button class="btn ${danger?"danger":""}" type="submit">${h(confirm)}</button></div></form>`,{label:title});
+    let done=false;const fin=v=>{if(!done){done=true;res(v)}};
+    $("[data-c]",d).onclick=()=>{d.close();fin(null)};d.addEventListener("close",()=>fin(null));
+    $("form",d).addEventListener("submit",e=>{e.preventDefault();
+      const rs=reason?$("#cr",d).value.trim():"";
+      if(reason&&rs.length<3){$(".ferr",d).textContent="Please give a reason (at least 3 characters).";$("#cr",d).focus();return}
+      if(typed&&$("#ct",d).value.trim()!==typed){$(".ferr",d).textContent=`Type ${typed} exactly to confirm.`;return}
+      fin({reason:rs});d.close()});
+    setTimeout(()=>{const f=$("textarea,input",d)||$("[type=submit]",d);f&&f.focus()},30);
+  });
+}
+// fields: [{n,l,t:"text|number|date|datetime-local|select|textarea|checkbox|password|file|perms|multiselect",o:[[v,label]],v,req,h,min,max,step,ml,accept,wide}]
+function field(f){
+  const id="f_"+f.n,req=f.req?" required":"",v=f.v??"";
+  let inp;
+  if(f.t==="select")inp=`<select id="${id}" name="${f.n}"${req}>${(f.o||[]).map(([k,l])=>`<option value="${h(k)}"${String(k)===String(v)?" selected":""}>${h(l)}</option>`).join("")}</select>`;
+  else if(f.t==="textarea")inp=`<textarea id="${id}" name="${f.n}" maxlength="${f.ml||2000}"${req}>${h(v)}</textarea>`;
+  else if(f.t==="checkbox")return`<label class="fld" style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="${id}" name="${f.n}"${v?" checked":""}> ${h(f.l)}</label>${f.h?`<div class="hint">${f.h}</div>`:""}`;
+  else if(f.t==="perms"||f.t==="multiselect")return`<div class="fld"><span style="font-size:12.5px;font-weight:600;color:var(--ink2)">${h(f.l)}</span><div class="perms" data-multi="${f.n}">${(f.o||[]).map(([k,l,dsc,dis])=>`<label><input type="checkbox" value="${h(k)}"${(v||[]).includes(k)?" checked":""}${dis?" disabled":""}><span>${h(l)}${dsc?`<small>${h(dsc)}</small>`:""}</span></label>`).join("")}</div>${f.h?`<div class="hint">${f.h}</div>`:""}</div>`;
+  else inp=`<input id="${id}" name="${f.n}" type="${f.t||"text"}" value="${f.t==="file"||f.t==="password"?"":h(v)}"${f.min!==undefined?` min="${f.min}"`:""}${f.max!==undefined?` max="${f.max}"`:""}${f.step?` step="${f.step}"`:""}${f.ml?` maxlength="${f.ml}"`:""}${f.accept?` accept="${f.accept}"`:""}${f.t==="password"?' autocomplete="new-password"':""}${req}>`;
+  return`<div class="fld"><label for="${id}">${h(f.l)}${f.req?" *":""}</label>${inp}${f.h?`<div class="hint">${f.h}</div>`:""}</div>`;
+}
+function formDlg({title,fields,submit="Save",intro="",onSubmit,drawer=false}){
+  const d=dlg(`<form novalidate><h2>${h(title)}</h2>${intro?`<p class="small" style="font-size:13.5px">${intro}</p>`:""}${fields.map(f=>Array.isArray(f)?`<div class="row2">${f.map(field).join("")}</div>`:field(f)).join("")}
+    <div class="ferr" role="alert"></div><div class="dacts"><button class="btn ghost" type="button" data-c>Cancel</button><button class="btn" type="submit">${h(submit)}</button></div></form>`,{drawer,label:title});
+  $("[data-c]",d).onclick=()=>d.close();
+  const flat=fields.flat();
+  $("form",d).addEventListener("submit",async e=>{
+    e.preventDefault();const vals={},er=$(".ferr",d);er.textContent="";
+    for(const f of flat){
+      if(f.t==="perms"||f.t==="multiselect"){vals[f.n]=$$(`[data-multi="${f.n}"] input:checked`,d).map(x=>x.value);continue}
+      const el=$("#f_"+f.n,d);if(!el)continue;
+      if(f.t==="checkbox")vals[f.n]=el.checked;
+      else if(f.t==="file"){const fl=el.files[0];if(fl){try{vals[f.n]=await readFile(fl,f)}catch(x){er.textContent=x.message;return}}}
+      else vals[f.n]=el.value.trim();
+      if(f.req&&f.t!=="checkbox"&&!vals[f.n]){er.textContent=`${f.l} is required.`;el.focus();return}
+    }
+    const b=$("[type=submit]",d);b.disabled=true;const old=b.textContent;b.textContent="Saving…";
+    const out=await onSubmit(vals);
+    b.disabled=false;b.textContent=old;
+    if(out===true){d.close();return}er.textContent=out||"Could not save.";
+  });
+  setTimeout(()=>{const f=$("input:not([type=checkbox]),select,textarea",d);f&&f.focus()},30);
+  return d;
+}
+// Files: images are resized/re-encoded in the browser; PDFs are sent as-is. The server re-validates the bytes.
+function readFile(file,f){return new Promise((res,rej)=>{
+  const max=f.maxBytes||3*1048576;
+  if(file.type==="application/pdf"){if(file.size>max)return rej(new Error("PDF is larger than "+Math.round(max/1048576)+" MB."));const r=new FileReader();r.onload=()=>res(r.result);r.onerror=()=>rej(new Error("File could not be read."));r.readAsDataURL(file);return}
+  if(!/^image\/(jpeg|png|webp)$/.test(file.type))return rej(new Error("Use a JPG, PNG or WebP image"+(f.accept&&f.accept.includes("pdf")?", or a PDF.":".")));
+  if(file.size>20e6)return rej(new Error("Image is too large (max 20 MB before compression)."));
+  const u=URL.createObjectURL(file),im=new Image();
+  im.onload=()=>{const k=Math.min(1,(f.px||1600)/Math.max(im.width,im.height)),c=document.createElement("canvas");c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext("2d").drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);
+    const out=c.toDataURL("image/jpeg",.85);if(out.length*0.75>max)return rej(new Error("Image is still too large after compression."));res(out)};
+  im.onerror=()=>{URL.revokeObjectURL(u);rej(new Error("Image could not be read."))};im.src=u;
+})}
+function reauth(){return new Promise(res=>{
+  const d=dlg(`<form novalidate><h2>${I("lock")} Confirm your password</h2><p class="small" style="font-size:13.5px">This is a sensitive action. Confirm your password to continue (valid for 10 minutes).</p><div class="fld"><label for="ra">Password</label><input id="ra" type="password" autocomplete="current-password" required></div><div class="ferr" role="alert"></div><div class="dacts"><button class="btn ghost" type="button" data-c>Cancel</button><button class="btn" type="submit">Confirm</button></div></form>`,{label:"Confirm password"});
+  let done=false;const fin=v=>{if(!done){done=true;res(v)}};
+  $("[data-c]",d).onclick=()=>{d.close();fin(false)};d.addEventListener("close",()=>fin(false));
+  $("form",d).addEventListener("submit",async e=>{e.preventDefault();const b=$("[type=submit]",d);b.disabled=true;
+    const r=await api("reauth",{password:$("#ra",d).value},{noReauth:true});b.disabled=false;
+    if(r.ok){fin(true);d.close();return}
+    $(".ferr",d).textContent=r.status===429?`Too many attempts. Try again in ${Math.ceil((r.j.retry_after||60)/60)} min.`:errText(r);$("#ra",d).value="";$("#ra",d).focus()});
+  setTimeout(()=>$("#ra",d).focus(),30);
+})}
+
+/* ---------------- charts (SVG, no libraries) ---------------- */
+const COLORS=["#3B82F6","#22C55E","#F59E0B","#38BDF8","#A78BFA","#EF4444"];
+function chart({labels,series,type="bar",fmt=num,height=240,title="Chart"}){
+  if(!labels.length)return empty("No data for this period.","bar-chart");
+  const W=760,H=height,L=64,R=12,T=14,B=34,n=labels.length,all=series.flatMap(s=>s.values.map(Number));
+  const m=Math.max(0,...all),e=10**Math.floor(Math.log10(m||1)),mx=m?Math.ceil(m/e*1.1*2)/2*e:1;
+  const X=i=>L+(n===1?(W-L-R)/2:i*(W-L-R)/(n-1)),Y=v=>H-B-v/mx*(H-T-B),bw=Math.max(2,Math.min(28,(W-L-R)/n/series.length*.7));
+  let g="";for(let k=0;k<=4;k++){const y=Y(mx*k/4);g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="#22314A"/><text x="${L-8}" y="${y+4}" text-anchor="end" fill="#A5B4C7" font-size="11">${h(fmt(mx*k/4))}</text>`}
+  const step=Math.max(1,Math.ceil(n/8));
+  const xl=labels.map((l,i)=>i%step===0||i===n-1?`<text x="${type==="bar"?L+(i+.5)*(W-L-R)/n:X(i)}" y="${H-10}" text-anchor="middle" fill="#A5B4C7" font-size="11">${h(l)}</text>`:"").join("");
+  let body="";
+  series.forEach((s,si)=>{const c=s.color||COLORS[si%COLORS.length];
+    if(type==="bar")s.values.forEach((v,i)=>{const cx=L+(i+.5)*(W-L-R)/n,x=cx-bw*series.length/2+si*bw,y=Y(Number(v)||0);body+=`<rect x="${x}" y="${y}" width="${bw-1}" height="${Math.max(0,H-B-y)}" rx="2" fill="${c}"><title>${h(labels[i])} · ${h(s.name)}: ${h(fmt(v))}</title></rect>`});
+    else{const pts=s.values.map((v,i)=>`${X(i)},${Y(Number(v)||0)}`).join(" ");body+=`<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2.5" stroke-linejoin="round"/>`+s.values.map((v,i)=>`<circle cx="${X(i)}" cy="${Y(Number(v)||0)}" r="3" fill="${c}"><title>${h(labels[i])} · ${h(s.name)}: ${h(fmt(v))}</title></circle>`).join("")}});
+  const legend=series.length>1?`<div class="legend">${series.map((s,i)=>`<span><i style="background:${s.color||COLORS[i%COLORS.length]}"></i>${h(s.name)}</span>`).join("")}</div>`:"";
+  const data=`<details class="data"><summary>Show data table</summary><div class="tw" style="margin-top:6px"><table><thead><tr><th>Period</th>${series.map(s=>`<th class="num">${h(s.name)}</th>`).join("")}</tr></thead><tbody>${labels.map((l,i)=>`<tr><td>${h(l)}</td>${series.map(s=>`<td class="num">${h(fmt(s.values[i]))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
+  return`<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${h(title)}">${g}${body}${xl}</svg>${legend}${data}</div>`;
+}
+
+/* ---------------- navigation & router ---------------- */
+const NAV=[
+  ["", [["overview","Overview","layout-dashboard",null]]],
+  ["People",[["users","User Management","users","manage_users"],["team","Team Management","user-plus","manage_team"],["roles","Roles & Permissions","key-round","manage_roles"],["sessions","Session Manager","monitor-smartphone","manage_security"]]],
+  ["AI Support",[["ai-users","AI Support Users","user","view_ai_conversations"],["ai-conversations","AI Conversations","message-square","view_ai_conversations"],["ai-analytics","AI Resolution Analytics","pie-chart","view_ai_conversations"],["handoffs","Human Handoff Queue","arrow-left-right",["manage_support","view_ai_conversations"]],["escalations","Escalation History","history",["manage_support","view_ai_conversations"]]]],
+  ["Operations",[["support","Human Support","headset","manage_support"],["reports","Reports","file-text",["manage_reports","approve_reports"]],["revenue","Revenue","wallet","view_revenue"],["analytics","Revenue Analytics","bar-chart","view_revenue"],["performance","Live Team Performance","activity","view_revenue"],["announcements","Announcements","megaphone","manage_announcements"]]],
+  ["Security & System",[["security","Security Center","shield","manage_security"],["audit","Audit Logs","scroll-text","view_audit_logs"],["emergency","Emergency Control","siren","manage_system"],["backups","Backup & Recovery","archive","manage_backups"],["health","System Health","heart-pulse","view_system_health"],["settings","System Settings","sliders","manage_settings"]]]
+];
+const can=p=>p===null||(Array.isArray(p)?p.some(x=>ME.perms.includes(x)):ME.perms.includes(p));
+const has=p=>!!ME&&can(p);
+function navHTML(){return NAV.map(([g,items])=>{const vis=items.filter(x=>can(x[3]));return vis.length?(g?`<h5>${h(g)}</h5>`:"")+vis.map(([id,l,ic])=>`<a href="#/${id}" data-nav="${id}">${I(ic)}<span>${h(l)}</span><span class="cnt" data-cnt="${id}" hidden></span></a>`).join(""):""}).join("")+`<h5>Account</h5><a href="#/profile" data-nav="profile">${I("user")}<span>My profile</span></a>`}
+const titleOf=id=>{for(const[g,items]of NAV)for(const x of items)if(x[0]===id)return{group:g,label:x[1],icon:x[2],perm:x[3]};return id==="profile"?{group:"Account",label:"My profile",icon:"user",perm:null}:null};
+function crumbs(extra){const t=titleOf(route)||{label:route};$("#crumbs").innerHTML=`<a href="#/overview">Dashboard</a>${t.group?I("chevron-right")+`<span>${h(t.group)}</span>`:""}${I("chevron-right")}${extra?`<a href="#/${route}">${h(t.label)}</a>${I("chevron-right")}<b>${h(extra)}</b>`:`<b>${h(t.label)}</b>`}`}
+function every(fn,ms){const id=setInterval(()=>{if(!document.hidden)fn()},ms);timers.push(id);return id}
+async function go(){
+  timers.forEach(clearInterval);timers=[];
+  const [id,...rest]=(location.hash.replace(/^#\/?/,"")||"overview").split("/");
+  const t=titleOf(id);route=t&&can(t.perm)?id:"overview";
+  $$("#snav a").forEach(a=>{const on=a.dataset.nav===route;a.classList.toggle("on",on);on?a.setAttribute("aria-current","page"):a.removeAttribute("aria-current")});
+  closeSide();crumbs();document.title=(titleOf(route)?.label||"Dashboard")+" · CHDS Admin";
+  const el=$("#main");el.innerHTML=loading();
+  const v=window.ADM.views[route];
+  try{await v(el,rest.map(decodeURIComponent))}catch(e){console.error(e);el.innerHTML=errorBox("This page failed to load.");$("[data-retry]",el).onclick=go}
+  el.focus({preventScroll:true});
+}
+addEventListener("hashchange",go);
+const openSide=()=>{$("#side").classList.add("open");$("#scrim").hidden=false;$("#sopen").setAttribute("aria-expanded","true")},closeSide=()=>{$("#side").classList.remove("open");$("#scrim").hidden=true;$("#sopen").setAttribute("aria-expanded","false")};
+
+/* ---------------- auth ---------------- */
+let uid="";
+const lerr=t=>{$("#lerr").textContent=t||""};
+function lock(){timers.forEach(clearInterval);timers=[];ME=null;$("#app").hidden=true;$("#login").hidden=false;$("#s1").hidden=false;$("#s2").hidden=true;lerr("");$$("dialog").forEach(d=>d.close())}
 async function enter(){
-  await refresh();
-  if(!D){lock();return}
-  show("#login",false);show("#app",true);last=Date.now();
-  clearInterval(timer);timer=setInterval(()=>{if(!document.hidden)refresh(true)},30000); // quiet poll: does not extend the session
+  const r=await api("me");if(!r.ok){lock();return}
+  ME=r.j;idleMs=ME.idle_ms||idleMs;last=Date.now();
+  $("#login").hidden=true;$("#app").hidden=false;
+  $("#snav").innerHTML=navHTML();$("#mename").textContent=ME.name;$("#merole").textContent=ME.role_name;$("#mav").textContent=ini(ME.name);
+  flagbar(ME.flags);go();
+  every(async()=>{const x=await api("me?quiet=1");if(x.ok){ME=x.j;flagbar(ME.flags)}},60000);
 }
-const bump=()=>{last=Date.now();if(D&&Date.now()-pingAt>60000){pingAt=Date.now();call("ping")}};
-["pointerdown","keydown","touchstart","scroll"].forEach(ev=>addEventListener(ev,bump,{passive:true}));
-setInterval(async()=>{if(D&&Date.now()-last>idleMs){await call("logout",{});lock();err("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}},10000);
-
-/* ---------- sign in ---------- */
-$("#s1").addEventListener("submit",async e=>{
-  e.preventDefault();err("");const b=$("#s1 button");b.disabled=true;
-  uid=$("#uid").value.trim();
-  const r=await call("login",{uid,password:$("#pw").value});$("#pw").value="";b.disabled=false;
-  if(r.ok){show("#s1",false);show("#s2",true);$("#code").focus();return}
-  err(r.status===429?"Too many attempts. Try again in 15 minutes.":r.status===503?(r.j.error==="db_not_migrated"?"Database is not set up: run ALL of supabase.sql in Supabase -> SQL Editor, then try again.":"The admin panel is not configured yet. See the README."):r.status===502?"Could not send the code. Open the bot in Telegram, press /start, then try again.":"Something went wrong. Please try again.");
-});
-$("#s2").addEventListener("submit",async e=>{
-  e.preventDefault();err("");const b=$("#s2 button");b.disabled=true;
-  const r=await call("otp",{uid,code:$("#code").value.trim()});$("#code").value="";b.disabled=false;
+function flagbar(f){const on=f?Object.entries(f).filter(([,v])=>v).map(([k])=>k.replace(/_/g," ")):[];const b=$("#flagbar");b.hidden=!on.length;b.innerHTML=on.length?I("siren")+`<span><b>Emergency Control active:</b> ${h(on.join(", "))}.${has("manage_system")?` <a href="#/emergency">Review</a>`:""}</span>`:""}
+$("#s1").addEventListener("submit",async e=>{e.preventDefault();lerr("");uid=$("#uid").value.trim();
+  if(!/^\d{1,20}$/.test(uid)){lerr("Enter your numeric Telegram user ID.");return}
+  const b=$("#s1 button");b.disabled=true;const r=await api("login",{uid,password:$("#pw").value});$("#pw").value="";b.disabled=false;
+  if(r.ok){$("#s1").hidden=true;$("#s2").hidden=false;$("#code").focus();return}
+  lerr(r.status===429?(r.j.retry_after?`Too many failed attempts. Try again in ${Math.ceil(r.j.retry_after/60)} minute(s).`:"Too many attempts. Try again in 15 minutes."):r.status===503?(r.j.error==="db_not_migrated"?"Database is not migrated: run supabase.sql (see docs/DEPLOYMENT.md).":"Sign-in is not configured or temporarily unavailable."):r.status===502?"Could not send the code. Open the bot in Telegram, press /start, then try again.":"Something went wrong. Please try again.")});
+$("#s2").addEventListener("submit",async e=>{e.preventDefault();lerr("");const b=$("#s2 button");b.disabled=true;
+  const r=await api("otp",{uid,code:$("#code").value.trim()});$("#code").value="";b.disabled=false;
   if(r.ok){await enter();return}
-  err(r.status===429?"Too many attempts. Try again in 15 minutes.":"Invalid or expired code. Start over and request a new one.");
-  if(r.status!==429){show("#s2",false);show("#s1",true)}
-});
-$("#back").onclick=()=>{show("#s2",false);show("#s1",true);err("")};
-$("#out").onclick=async()=>{await call("logout",{});lock()};
-$("#outall").onclick=async()=>{if(confirm("Sign out of all admin sessions on every device?")){await call("logout",{all:true});lock()}};
+  lerr(r.status===429?`Too many attempts. Try again in ${Math.ceil((r.j.retry_after||900)/60)} minute(s).`:"Invalid or expired code. Start over to get a new one.");if(r.status!==429){$("#s2").hidden=true;$("#s1").hidden=false}});
+$("#back").onclick=()=>{$("#s2").hidden=true;$("#s1").hidden=false;lerr("")};
+$("#out").onclick=async()=>{await api("logout",{});lock()};
+$("#outall").onclick=async()=>{const c=await confirmAct({title:"Sign out everywhere?",text:"All of your dashboard sessions on every device will end.",confirm:"Sign out everywhere",danger:true});if(c){await api("logout",{all:true});lock()}};
+$("#mebtn").onclick=e=>{e.stopPropagation();const m=$("#memenu");m.hidden=!m.hidden;$("#mebtn").setAttribute("aria-expanded",String(!m.hidden))};
+document.addEventListener("click",()=>{$("#memenu").hidden=true;$("#mebtn").setAttribute("aria-expanded","false")});
+$("#sopen").innerHTML=I("menu");$("#sclose").innerHTML=I("x");$("#bell").innerHTML=I("bell");$("#site").innerHTML=I("external-link");
+$("#sopen").onclick=openSide;$("#sclose").onclick=closeSide;$("#scrim").onclick=closeSide;
+$("#bell").onclick=async()=>{const r=await api("my_announcements");if(!r.ok){toast(errText(r),"err");return}
+  dlg(`<div class="db"><div class="dh"><h2>Announcements</h2><button class="ibtn" type="button" data-c aria-label="Close">${I("x")}</button></div>${r.j.rows.length?r.j.rows.map(a=>`<div class="card"><h3>${badge(a.priority)} ${h(a.title)}</h3><p style="white-space:pre-wrap;margin:0">${h(a.message)}</p><p class="small">${when(a.publish_at)}</p></div>`).join(""):empty("No announcements for you right now.","bell")}</div>`,{label:"Announcements"});$("[data-c]").onclick=e=>e.target.closest("dialog").close()};
+const bump=()=>{last=Date.now();if(ME&&Date.now()-pingAt>60000){pingAt=Date.now();api("ping")}};
+["pointerdown","keydown","touchstart","scroll"].forEach(ev=>addEventListener(ev,bump,{passive:true}));
+setInterval(async()=>{if(ME&&Date.now()-last>idleMs){await api("logout",{});lock();lerr("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}},10000);
+addEventListener("keydown",e=>{if(e.key==="Escape")closeSide()});
+// boot: valid session cookie → straight to the dashboard
+(async()=>{const r=await fetch("/api/admin/me",{credentials:"same-origin",cache:"no-store"}).catch(()=>null);if(r&&r.ok)enter();else lock()})();
 
-/* ---------- data ---------- */
-async function refresh(quiet){
-  const r=await call("overview?status="+filter+(quiet?"&quiet=1":""));
-  if(!r.ok)return;D=r.j;idleMs=D.idle_ms||idleMs;
-  $("#pb").textContent=D.pending?"("+D.pending+")":"";
-  const a=document.activeElement;
-  if(quiet&&a&&$("#view").contains(a)&&/^(INPUT|SELECT|SUMMARY|TEXTAREA)$/.test(a.tagName))return; // do not wipe what the admin is typing
-  render();
-}
-async function act(body,okMsg){
-  const r=await call("act",body);
-  note=r.ok?(okMsg||"Done."):(r.j.error==="already_handled"?"Already handled by someone else.":"Action failed ("+(r.j.error||r.status)+").");
-  await refresh();return r;
-}
-
-/* ---------- views ---------- */
-const badge=s=>`<span class="bd ${s==="approved"||s==="live"?"ok":s==="pending"||s==="wait"?"wa":"no"}">${esc(s)}</span>`;
-function overview(){
-  const T=D.stats.totals,S=D.stats.series,mx=Math.max(1,...S.map(d=>d.revenue)),y=D.sys,ok=v=>v?'<span class="bd ok">OK</span>':'<span class="bd no">Missing</span>';
-  const live=D.chats.filter(c=>c.status!=="ended").length;
-  return `<div class="sec" style="margin-top:20px"><div class="cards">
-    <div class="card"><b>${money(T.revenue)}</b><small>Approved revenue</small></div>
-    <div class="card"><b>${T.recovered.toLocaleString()}</b><small>Accounts recovered</small></div>
-    <div class="card"><b>${D.pending}</b><small>Pending reports</small></div>
-    <div class="card"><b>${live}</b><small>Open chats</small></div></div></div>
-  <div class="sec"><h3>Revenue, last 30 days</h3><div class="bars" role="img" aria-label="Revenue per day">${S.map(d=>`<i title="${esc(d.d)}: ${money(d.revenue)}" style="height:${Math.max(2,d.revenue/mx*100)}%"></i>`).join("")}</div></div>
-  <div class="sec"><h3>System status</h3><div class="kv">
-    <div><span>Groq API key</span> ${ok(y.groq_key)}</div><div><span>AI model</span> ${esc(y.groq_model)}</div>
-    <div><span>Telegram bot token</span> ${ok(y.bot_token)}</div><div><span>Webhook secret</span> ${ok(y.webhook_secret)}</div>
-    <div><span>Webhook connected</span> ${ok(y.webhook_url)}</div><div><span>Pending updates</span> ${esc(y.webhook_pending??"-")}</div>
-    <div><span>Team UIDs</span> ${y.team_uids}</div><div><span>Admin UIDs</span> ${y.admin_uids}</div></div>
-    ${y.webhook_error?`<p class="err">Telegram error: ${esc(y.webhook_error)}</p>`:""}
-    <div class="row" style="margin-top:14px"><button class="mb" data-a="webhook" type="button">Connect Telegram bot</button><button class="mb" data-a="testai" type="button">Test AI</button></div></div>`;
-}
-function reports(){
-  const rows=D.reports.map(r=>`<tr><td><code>${esc(r.id)}</code></td><td>${esc(r.name)}</td><td>${esc(r.report_date)}</td><td>${r.recovered}</td><td>${money(r.revenue)}</td><td>${badge(r.status)}</td><td>${when(r.created_at)}</td><td>${
-    (r.status==="pending"?`<button class="mb g" data-a="approve" data-id="${esc(r.id)}" type="button">Approve</button><button class="mb r" data-a="reject" data-id="${esc(r.id)}" type="button">Reject</button>`:"")+
-    `<button class="mb r" data-a="delete" data-id="${esc(r.id)}" type="button">Delete</button>`}</td></tr>`).join("");
-  const today=new Date().toISOString().slice(0,10);
-  return `<div class="sec" style="margin-top:20px"><div class="row"><h3 style="margin:0;margin-right:auto">Reports</h3>
-    <select id="flt" aria-label="Filter">${["all","pending","approved"].map(v=>`<option value="${v}"${v===filter?" selected":""}>${v[0].toUpperCase()+v.slice(1)}</option>`).join("")}</select></div>
-    <details style="margin-top:12px;padding:0;background:none;border:0"><summary class="mb" style="display:inline-block">+ Add report manually</summary>
-    <form id="addf" class="addf"><input name="name" placeholder="Member name" maxlength="40" required><input name="recovered" type="number" min="0" max="9999" step="1" placeholder="Recovered" required><input name="revenue" type="number" min="0" max="10000000" step="0.01" placeholder="Earnings" required><input name="date" type="date" max="${today}" value="${today}" required><span></span><button class="btn sm" type="submit">Add (approved)</button></form></details>
-    <div class="tw" style="margin-top:12px"><table><thead><tr><th>ID</th><th>Member</th><th>Date</th><th>Recovered</th><th>Earnings</th><th>Status</th><th>Submitted</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="8">No reports yet.</td></tr>'}</tbody></table></div></div>`;
-}
-function chats(){
-  const rows=D.chats.map(c=>`<tr><td><code>${esc(c.sid)}</code></td><td>${esc(c.name)}</td><td>${badge(c.status)}</td><td>${esc(c.agents.join(", ")||"-")}</td><td>${when(c.updated_at)}</td><td><button class="mb" data-a="chat" data-sid="${esc(c.sid)}" type="button">View</button>${c.status!=="ended"?`<button class="mb r" data-a="close" data-sid="${esc(c.sid)}" type="button">Close</button>`:""}</td></tr>`).join("");
-  const tr=chatSid?`<div class="tr" aria-label="Transcript">${chatMsgs.map(m=>`<div class="${m.sender==="agent"?"a":m.sender==="sys"?"s":""}"><b>${esc(m.sender==="user"?"Customer":m.sender==="agent"?(m.author||"Agent"):"System")}</b> · ${esc(when(m.created_at))}<br>${esc(m.body)}</div>`).join("")||"<div class=s>No messages.</div>"}</div>`:"";
-  return `<div class="sec" style="margin-top:20px"><h3>Customer chats</h3><div class="tw"><table><thead><tr><th>Session</th><th>Customer</th><th>Status</th><th>Agents</th><th>Updated</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6">No chats yet.</td></tr>'}</tbody></table></div>${tr}</div>`;
-}
-function audit(){
-  const rows=D.audit.map(a=>`<tr><td>${esc(when(a.at))}</td><td>${esc(a.actor)}</td><td>${esc(a.action)}</td><td class="w">${esc(JSON.stringify(a.detail||{}))}</td></tr>`).join("");
-  return `<div class="sec" style="margin-top:20px"><h3>Audit log</h3><div class="tw"><table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Details</th></tr></thead><tbody>${rows||'<tr><td colspan="4">Nothing yet.</td></tr>'}</tbody></table></div></div>`;
-}
-function render(){
-  if(!D)return;
-  const v=$("#view"),keep=document.activeElement&&document.activeElement.id==="flt";
-  v.innerHTML=(note?`<p class="msgok" role="status" style="margin-top:14px">${esc(note)}</p>`:"")+({overview,reports,chats,audit}[tab])();
-  if(keep){const f=$("#flt");if(f)f.focus()}
-}
-
-/* ---------- events (no inline handlers: strict CSP) ---------- */
-$("#tabs").addEventListener("click",e=>{const b=e.target.closest("[data-t]");if(!b)return;tab=b.dataset.t;note="";document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));render()});
-$("#view").addEventListener("change",e=>{if(e.target.id==="flt"){filter=e.target.value;refresh()}});
-$("#view").addEventListener("submit",async e=>{
-  if(e.target.id!=="addf")return;e.preventDefault();
-  const f=new FormData(e.target);
-  await act({type:"add",name:f.get("name"),recovered:f.get("recovered"),revenue:f.get("revenue"),date:f.get("date")},"Report added and published.");
-});
-$("#view").addEventListener("click",async e=>{
-  const b=e.target.closest("[data-a]");if(!b)return;const a=b.dataset.a,id=b.dataset.id,sid=b.dataset.sid;b.disabled=true;
-  if(a==="approve")await act({type:"approve",id},"Report approved.");
-  else if(a==="reject"){if(confirm("Reject and remove this report?"))await act({type:"reject",id},"Report rejected.");else b.disabled=false}
-  else if(a==="delete"){if(confirm("Delete this report permanently? It will disappear from the website."))await act({type:"delete",id},"Report deleted.");else b.disabled=false}
-  else if(a==="close"){if(confirm("Close this chat? The customer goes back to the AI assistant."))await act({type:"close_chat",sid},"Chat closed.");else b.disabled=false}
-  else if(a==="chat"){const r=await call("chat?sid="+encodeURIComponent(sid));if(r.ok){chatSid=sid;chatMsgs=r.j.messages||[];note="";render()}else b.disabled=false}
-  else if(a==="webhook"){const r=await act({type:"webhook"});note=r.j.ok?"Telegram bot connected (webhook, commands and name set).":"Could not connect: "+(r.j.error||"check BOT_TOKEN and WEBHOOK_SECRET");render()}
-  else if(a==="testai"){const r=await call("act",{type:"test_ai"});note=(r.j.ok?"✅ ":"❌ ")+(r.j.detail||"No response.");render()}
-});
-document.addEventListener("visibilitychange",()=>{if(!document.hidden&&D){if(Date.now()-last>idleMs){call("logout",{});lock();err("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}else refresh(true)}});
-show("#login",false);enter(); // already signed in (valid session cookie)? go straight to the dashboard
+return{$,$$,h,I,money,moneyS,num,when,day,dur,ago,ini,badge,phToday,api,errText,download,toast,loading,empty,errorBox,page,kpis,table,pager,dlg,confirmAct,formDlg,chart,every,crumbs,has,go,me:()=>ME,views:{}};
 })();
