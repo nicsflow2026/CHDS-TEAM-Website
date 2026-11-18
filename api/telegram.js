@@ -1,4 +1,4 @@
-import { api, E, sb, say, jsonBody, logError } from "../lib/core.js";
+import { api, E, sb, say, jsonBody, logError, limited } from "../lib/core.js";
 import { timingSafeEqual, createHash } from "node:crypto";
 const same = (a, b) => timingSafeEqual(createHash("sha256").update(String(a)).digest(), createHash("sha256").update(String(b)).digest());
 import { tgUpdate } from "../lib/bot.js";
@@ -6,6 +6,7 @@ export default api(async (req, res) => {
   if (req.method !== "POST") return res.status(405).end();
   const sec = req.headers["x-telegram-bot-api-secret-token"];
   if (!E.WEBHOOK_SECRET || !sec || !same(sec, E.WEBHOOK_SECRET)) return res.status(403).end();
+  if (await limited(req, "tg-webhook", 1200, 60)) return res.status(429).end(); // generous: Telegram retries later
   const u = jsonBody(req);
   try {
     if (u.update_id) { // Telegram retries are ignored (no duplicate reports); a DB hiccup here must not block the bot
