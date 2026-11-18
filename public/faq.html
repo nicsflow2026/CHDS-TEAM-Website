@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FAQ | CH Digital Services</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Answers about account recovery, timelines and custom websites.">
+<meta name="theme-color" content="#0a0620">
+<meta property="og:title" content="FAQ | CH Digital Services">
+<meta property="og:description" content="Answers about account recovery, timelines and custom websites.">
+<link rel="icon" href="/assets/logo-h.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/site.css">
+<noscript><style>.reveal{opacity:1}</style></noscript>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div id="pg"></div>
+<header id="hd"><div class="container bar">
+  <a class="brand" href="/"><img src="/assets/logo-h.png" alt="" width="36" height="36"><span>CH Digital Services</span></a>
+  <nav id="nav" aria-label="Main"><a href="/">Home</a><a href="/services">Services</a><a href="/team">Team</a><a href="/faq">FAQ</a><a href="/contact">Contact</a><a class="navcta" href="/help">Get help</a></nav>
+  <a class="btn sm" href="/help">Get help</a>
+  <button id="burger" type="button" aria-label="Menu" aria-expanded="false" aria-controls="nav"></button>
+</div></header>
+<main id="main">
+<section class="phead"><div class="container reveal"><div class="eyebrow">FAQ</div><h1 style="font-size:clamp(28px,4.6vw,44px)">Common questions</h1><p class="lead">Quick answers before you get in touch.</p></div></section>
+<section><div class="container">
+  <details><summary>How long does recovery take?</summary><p>It depends on the platform's review. Some cases resolve in days, others take longer. We keep you updated.</p></details>
+  <details><summary>Do you guarantee recovery?</summary><p>No one can guarantee it. The platform makes the final decision. We maximize your chances with a correct, complete case.</p></details>
+  <details><summary>What information do you need from me?</summary><p>The account or page affected, what happened and when, and any notices or screenshots you received. We will tell you what else your case needs.</p></details>
+  <details><summary>Who can you help?</summary><p>Only the rightful owner of an account or page.</p></details>
+  <details><summary>How much is a custom website?</summary><p>Pricing depends on pages and features. Message us for a free quote.</p></details>
+  <div class="cta reveal" style="margin-top:28px"><div><h2>Still have questions?</h2><p>Ask our AI assistant, or talk to a human agent.</p></div><button class="btn open-ai" type="button">Open chat</button></div>
+</div></section>
+</main>
+<footer>
+  <div class="fl"><a href="/services">Services</a><a href="/team">Team</a><a href="/faq">FAQ</a><a href="/contact">Contact</a><a href="/help">Get help</a></div>
+  © 2024–<span id="yr">2026</span> CH Digital Services. All rights reserved.
+</footer>
+<button id="fab" type="button" aria-label="Open AI assistant" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg></button>
+<div id="chat" role="dialog" aria-label="CHDS support chat">
+  <div class="ch"><div><span id="ct">CHDS AI Support</span><small><i class="dot" id="cd"></i><span id="cst">Online · replies instantly</span></small></div><button type="button" id="cx" aria-label="Close">✕</button></div>
+  <div id="msgs" aria-live="polite"></div>
+  <div class="chips" id="chips"></div>
+  <div class="ctools"><button type="button" id="hu">👤 Talk to a human</button><button type="button" id="bk" hidden>↩ Back to AI assistant</button></div>
+  <div class="prev" id="prev" hidden></div>
+  <form class="cin" id="cf"><button type="button" id="at" aria-label="Attach screenshot">📎</button><input type="file" id="fi" accept="image/*" multiple hidden><input id="ci" placeholder="Type your message…" aria-label="Message" maxlength="500" autocomplete="off"><button class="btn" id="cs" type="submit">Send</button></form>
+</div>
+<script src="/assets/config.js"></script>
+<script src="/assets/site.js"></script>
+</body>
+</html>

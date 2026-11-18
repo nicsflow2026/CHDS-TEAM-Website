@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CHDS Admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#0a0620">
+<link rel="icon" href="/assets/logo-h.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/site.css">
+<link rel="stylesheet" href="/assets/admin.css">
+</head>
+<body class="adm">
+<main id="login" class="lg">
+  <div class="lc">
+    <img src="/assets/logo-h.png" alt="" width="56" height="56">
+    <h1>CHDS Admin</h1>
+    <form id="s1" style="display:grid;gap:12px" autocomplete="off">
+      <p>Step 1 of 2 — sign in with your Telegram ID and admin password.</p>
+      <input id="uid" inputmode="numeric" placeholder="Telegram user ID" required maxlength="20" aria-label="Telegram user ID" autocomplete="username">
+      <input id="pw" type="password" placeholder="Admin password" required maxlength="200" aria-label="Admin password" autocomplete="current-password">
+      <button class="btn" type="submit">Continue</button>
+    </form>
+    <form id="s2" class="hide" style="display:grid;gap:12px" autocomplete="off">
+      <p>Step 2 of 2 — enter the 6-digit code our bot sent to your Telegram. It expires in 5 minutes.</p>
+      <input id="code" inputmode="numeric" pattern="\d{6}" maxlength="6" placeholder="123456" required aria-label="6-digit code" autocomplete="one-time-code">
+      <button class="btn" type="submit">Sign in</button>
+      <button class="btn ghost" type="button" id="back">Start over</button>
+    </form>
+    <div class="err" id="err" role="alert"></div>
+  </div>
+</main>
+
+<div id="app" class="hide">
+  <div class="top"><div class="container">
+    <div class="in"><h1>CHDS Admin</h1><a class="mb" href="/" target="_blank" rel="noopener noreferrer">View site</a><button class="mb" id="out" type="button">Sign out</button><button class="mb r" id="outall" type="button">Sign out everywhere</button></div>
+    <div class="tabsb" role="tablist" id="tabs">
+      <button type="button" data-t="overview" class="on">Overview</button><button type="button" data-t="reports">Reports <span id="pb"></span></button><button type="button" data-t="chats">Chats</button><button type="button" data-t="audit">Audit log</button>
+    </div>
+  </div></div>
+  <div class="container" style="padding-bottom:60px"><div id="view"></div></div>
+</div>
+<script src="/assets/admin.js"></script>
+</body>
+</html>
