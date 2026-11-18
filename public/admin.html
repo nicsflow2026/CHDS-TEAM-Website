@@ -5,44 +5,64 @@
 <title>CHDS Admin</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
-<meta name="theme-color" content="#0a0620">
+<meta name="theme-color" content="#080D18">
+<meta name="color-scheme" content="dark">
 <link rel="icon" href="/assets/logo-h.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/assets/site.css?v=7">
-<link rel="stylesheet" href="/assets/admin.css?v=7">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/admin.css?v=8">
 </head>
-<body class="adm">
-<main id="login" class="lg">
-  <div class="lc">
-    <img src="/assets/logo-h.png" alt="" width="56" height="56">
-    <h1>CHDS Admin</h1>
-    <form id="s1" style="display:grid;gap:12px" autocomplete="off">
-      <p>Step 1 of 2 — sign in with your Telegram ID and admin password.</p>
-      <input id="uid" inputmode="numeric" placeholder="Telegram user ID" required maxlength="20" aria-label="Telegram user ID" autocomplete="username">
-      <input id="pw" type="password" placeholder="Admin password" required maxlength="200" aria-label="Admin password" autocomplete="current-password">
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<main id="login" class="login" hidden>
+  <div class="lcard">
+    <div class="lbrand"><img src="/assets/logo-h.png" alt="" width="44" height="44"><div><b>CHDS Admin</b><small>Secure dashboard</small></div></div>
+    <form id="s1" class="lform" autocomplete="off" novalidate>
+      <p>Step 1 of 2 — sign in with your Telegram user ID and your password.</p>
+      <label for="uid">Telegram user ID</label><input id="uid" inputmode="numeric" required maxlength="20" autocomplete="username">
+      <label for="pw">Password</label><input id="pw" type="password" required maxlength="200" autocomplete="current-password">
       <button class="btn" type="submit">Continue</button>
     </form>
-    <form id="s2" class="hide" style="display:grid;gap:12px" autocomplete="off">
-      <p>Step 2 of 2 — enter the 6-digit code our bot sent to your Telegram. It expires in 5 minutes.</p>
-      <input id="code" inputmode="numeric" pattern="\d{6}" maxlength="6" placeholder="123456" required aria-label="6-digit code" autocomplete="one-time-code">
+    <form id="s2" class="lform" autocomplete="off" hidden novalidate>
+      <p>Step 2 of 2 — enter the 6-digit code our Telegram bot sent you. It expires in 5 minutes.</p>
+      <label for="code">6-digit code</label><input id="code" inputmode="numeric" pattern="\d{6}" maxlength="6" required autocomplete="one-time-code">
       <button class="btn" type="submit">Sign in</button>
       <button class="btn ghost" type="button" id="back">Start over</button>
     </form>
-    <div class="err" id="err" role="alert"></div>
+    <div class="ferr" id="lerr" role="alert"></div>
+    <p class="small">Protected by a password and a one-time Telegram code. Sessions end after inactivity.</p>
   </div>
 </main>
-
-<div id="app" class="hide">
-  <div class="top"><div class="container">
-    <div class="in"><h1>CHDS Admin</h1><a class="mb" href="/" target="_blank" rel="noopener noreferrer">View site</a><button class="mb" id="out" type="button">Sign out</button><button class="mb r" id="outall" type="button">Sign out everywhere</button></div>
-    <div class="tabsb" role="tablist" id="tabs">
-      <button type="button" data-t="overview" class="on">Overview</button><button type="button" data-t="reports">Reports <span id="pb"></span></button><button type="button" data-t="chats">Chats</button><button type="button" data-t="audit">Audit log</button>
-    </div>
-  </div></div>
-  <div class="container" style="padding-bottom:60px"><div id="view"></div></div>
+<div id="app" hidden>
+  <aside id="side" aria-label="Dashboard navigation">
+    <div class="sbrand"><img src="/assets/logo-h.png" alt="" width="30" height="30"><b>CHDS Admin</b><button class="ibtn only-m" type="button" id="sclose" aria-label="Close navigation"></button></div>
+    <nav id="snav"></nav>
+  </aside>
+  <div id="scrim" hidden></div>
+  <div class="mainw">
+    <header class="top">
+      <button class="ibtn only-m" type="button" id="sopen" aria-label="Open navigation" aria-controls="side" aria-expanded="false"></button>
+      <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"></nav>
+      <div class="tright">
+        <button class="ibtn" type="button" id="bell" aria-label="Announcements"></button>
+        <a class="ibtn" href="/" target="_blank" rel="noopener noreferrer" aria-label="View website" id="site"></a>
+        <button class="me" type="button" id="mebtn" aria-haspopup="menu" aria-expanded="false"><span class="mav" id="mav"></span><span class="mtxt"><b id="mename"></b><small id="merole"></small></span></button>
+        <div class="menu" id="memenu" role="menu" hidden>
+          <a role="menuitem" href="#/profile">My profile</a>
+          <button role="menuitem" type="button" id="out">Sign out</button>
+          <button role="menuitem" type="button" id="outall">Sign out everywhere</button>
+        </div>
+      </div>
+    </header>
+    <div id="flagbar" hidden></div>
+    <main id="main" class="content" tabindex="-1"></main>
+  </div>
 </div>
-<script src="/assets/admin.js?v=7"></script>
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
+<script src="/assets/icons.js?v=8"></script>
+<script src="/assets/admin.js?v=8"></script>
+<script src="/assets/admin-views.js?v=8"></script>
+<script src="/assets/admin-views-ops.js?v=8"></script>
 </body>
 </html>
