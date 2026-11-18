@@ -11,7 +11,6 @@ const tgUrl="https://t.me/"+encodeURIComponent(CONFIG.TG);
 
 if($("#yr"))$("#yr").textContent=new Date().getFullYear();
 
-/* header / nav */
 const hd=$("#hd"),nav=$("#nav"),bg=$("#burger");
 const pg=$("#pg"),onScroll=()=>{hd.classList.toggle("sc",scrollY>12);const h=document.documentElement.scrollHeight-innerHeight;pg.style.width=(h>0?scrollY/h*100:0)+"%"};onScroll();addEventListener("scroll",onScroll,{passive:true});
 const closeNav=()=>{nav.classList.remove("open");bg.setAttribute("aria-expanded","false")};
@@ -19,11 +18,9 @@ bg.onclick=()=>{const o=nav.classList.toggle("open");bg.setAttribute("aria-expan
 $$("a[href^='#']",nav).forEach(a=>a.addEventListener("click",closeNav));
 addEventListener("keydown",e=>{if(e.key==="Escape"){closeNav();setChat(false)}});
 
-/* reveal on scroll */
 const io="IntersectionObserver" in window?new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add("in");io.unobserve(e.target)}}),{threshold:.12}):null;
 const watch=()=>$$(".reveal:not(.in)").forEach(el=>io?io.observe(el):el.classList.add("in"));
 
-/* team */
 const safe=u=>/^https?:\/\//i.test(u)?u:"";
 const card=m=>{
   const ini=m.n.split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase();
@@ -36,8 +33,7 @@ const TR=$("#team-root");if(TR)TR.innerHTML=[["founder","Founder"],["admin","Adm
   const L=TEAM.filter(m=>m.g===g);
   return L.length?`<div class="tg reveal"><h3>${t} <span>${L.length}</span></h3><div class="tgrid ${g}">${L.map(card).join("")}</div></div>`:"";
 }).join("");
-
-/* contact links + form */
+  
 const ML=$("#main-links");if(ML)ML.innerHTML=`<a href="${tgUrl}" target="_blank" rel="noopener noreferrer">Telegram</a>`+(CONFIG.WA?`<a href="https://wa.me/${encodeURIComponent(CONFIG.WA)}" target="_blank" rel="noopener noreferrer">WhatsApp</a>`:"")+`<a href="mailto:${esc(CONFIG.EMAIL)}">Email</a>`;
 const msgText=()=>`Hi CH Digital Services,\n\nName: ${$("#fn").value.trim()}\nService: ${$("#fs").value}\n\nDetails:\n${$("#fd").value.trim()}`;
 if(CONFIG.WA&&$("#wa")){const w=$("#wa");w.hidden=false;w.onclick=()=>{w.href=`https://wa.me/${encodeURIComponent(CONFIG.WA)}?text=${encodeURIComponent(msgText())}`}}
@@ -47,7 +43,6 @@ if($("#rf"))$("#rf").addEventListener("submit",async e=>{
   window.open(tgUrl,"_blank","noopener");
 });
 
-/* live data */
 let DATA=null,demo=false,metric="revenue",range=30,animate=true,prev={rec:0,rev:0};
 const day=t=>new Date(t).toISOString().slice(0,10);
 function demoData(){
@@ -110,7 +105,6 @@ if($("#cwrap")){let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTim
 load();setInterval(()=>{if(!document.hidden)load()},CONFIG.POLL);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)load()});}
 
-/* Support chat: CHDS AI (Groq) + human handoff via Telegram */
 const chat=$("#chat"),msgs=$("#msgs"),hist=[];
 let sid="";try{sid=sessionStorage.getItem("chds_sid")||""}catch{}
 if(!/^[a-f0-9]{16}$/.test(sid)){sid=[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,"0")).join("");try{sessionStorage.setItem("chds_sid",sid)}catch{}}
@@ -135,7 +129,6 @@ function add(t,cls,imgs,who){
 }
 const sys=t=>add(t,"sys");
 
-/* screenshots: compress + OCR (Tesseract.js, runs in the browser) */
 const compress=f=>new Promise((res,rej)=>{
   const u=URL.createObjectURL(f),i=new Image();
   i.onload=()=>{const k=Math.min(1,1280/Math.max(i.width,i.height)),c=document.createElement("canvas");c.width=Math.max(1,Math.round(i.width*k));c.height=Math.max(1,Math.round(i.height*k));const x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height);x.drawImage(i,0,0,c.width,c.height);URL.revokeObjectURL(u);res(c.toDataURL("image/jpeg",.72))};
@@ -158,7 +151,6 @@ $("#fi").onchange=async e=>{
   e.target.value="";renderPrev();
 };
 
-/* sending */
 async function send(t){
   if(busy)return;
   const sh=pending.splice(0);renderPrev();
@@ -183,7 +175,6 @@ async function send(t){
   w.remove();add(out,"bot");hist.push({role:"assistant",content:out});busy=false;
 }
 
-/* human handoff */
 async function handoff(){
   if(busy||mode!=="ai")return;busy=true;
   const w=add("Contacting the CHDS team…","bot typing");
@@ -210,7 +201,6 @@ function endHuman(){clearTimeout(pollT);flag(false);setMode("ai");shots=[];ocrTx
 $("#bk").onclick=async()=>{try{await post("/api/human/end",{sid})}catch{}sys("CHDS AI Support is back to assist you.");endHuman()};
 $("#hu").onclick=()=>{add("Talk to a human","me");handoff()};
 
-/* open / greet */
 function setChat(open){chat.classList.toggle("on",open);$("#fab").setAttribute("aria-expanded",open);if(open){if(!msgs.children.length)greet();setTimeout(()=>$("#ci").focus(),60)}}
 function greet(){
   add("Hi, I'm CHDS AI Support. I help with Facebook and Instagram account issues. Tell me what happened, and attach a screenshot with 📎 if you have one.","bot");
@@ -220,7 +210,6 @@ $("#cf").addEventListener("submit",e=>{e.preventDefault();const i=$("#ci"),t=i.v
 $("#fab").onclick=()=>setChat(!chat.classList.contains("on"));$("#cx").onclick=()=>setChat(false);$$(".open-ai").forEach(b=>b.onclick=()=>setChat(true));
 try{if(sessionStorage.getItem("chds_h")){setMode("wait");poll()}}catch{}
 
-/* polish: spotlight, stagger, active nav */
 document.addEventListener("pointermove",e=>{const c=e.target.closest&&e.target.closest(".stat,.panel,.svc,.step,.tcard");if(c){const r=c.getBoundingClientRect();c.style.setProperty("--mx",(e.clientX-r.left)+"px");c.style.setProperty("--my",(e.clientY-r.top)+"px")}},{passive:true});
 $$(".stats,.grid3,.tgrid").forEach(g=>[...g.children].forEach((c,i)=>c.style.setProperty("--d",i*70+"ms")));
 {const p=location.pathname.replace(/\/$/,"")||"/";$$("a",nav).forEach(a=>{const h=(a.getAttribute("href")||"").replace(/\/$/,"")||"/";a.classList.toggle("on",h===p)})}
