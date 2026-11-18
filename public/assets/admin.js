@@ -18,7 +18,6 @@ async function call(path,body){
 }
 function lock(){clearInterval(timer);D=null;show("#app",false);show("#login",true);show("#s1",true);show("#s2",false);err("")}
 
-/* ---------- enter dashboard / auto sign-in / idle timeout ---------- */
 async function enter(){
   await refresh();
   if(!D){lock();return}
@@ -29,7 +28,6 @@ const bump=()=>{last=Date.now();if(D&&Date.now()-pingAt>60000){pingAt=Date.now()
 ["pointerdown","keydown","touchstart","scroll"].forEach(ev=>addEventListener(ev,bump,{passive:true}));
 setInterval(async()=>{if(D&&Date.now()-last>idleMs){await call("logout",{});lock();err("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}},10000);
 
-/* ---------- sign in ---------- */
 $("#s1").addEventListener("submit",async e=>{
   e.preventDefault();err("");const b=$("#s1 button");b.disabled=true;
   uid=$("#uid").value.trim();
@@ -48,7 +46,6 @@ $("#back").onclick=()=>{show("#s2",false);show("#s1",true);err("")};
 $("#out").onclick=async()=>{await call("logout",{});lock()};
 $("#outall").onclick=async()=>{if(confirm("Sign out of all admin sessions on every device?")){await call("logout",{all:true});lock()}};
 
-/* ---------- data ---------- */
 async function refresh(quiet){
   const r=await call("overview?status="+filter+(quiet?"&quiet=1":""));
   if(!r.ok)return;D=r.j;idleMs=D.idle_ms||idleMs;
@@ -63,7 +60,6 @@ async function act(body,okMsg){
   await refresh();return r;
 }
 
-/* ---------- views ---------- */
 const badge=s=>`<span class="bd ${s==="approved"||s==="live"?"ok":s==="pending"||s==="wait"?"wa":"no"}">${esc(s)}</span>`;
 function overview(){
   const T=D.stats.totals,S=D.stats.series,mx=Math.max(1,...S.map(d=>d.revenue)),y=D.sys,ok=v=>v?'<span class="bd ok">OK</span>':'<span class="bd no">Missing</span>';
@@ -109,7 +105,6 @@ function render(){
   if(keep){const f=$("#flt");if(f)f.focus()}
 }
 
-/* ---------- events (no inline handlers: strict CSP) ---------- */
 $("#tabs").addEventListener("click",e=>{const b=e.target.closest("[data-t]");if(!b)return;tab=b.dataset.t;note="";document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));render()});
 $("#view").addEventListener("change",e=>{if(e.target.id==="flt"){filter=e.target.value;refresh()}});
 $("#view").addEventListener("submit",async e=>{
@@ -128,5 +123,5 @@ $("#view").addEventListener("click",async e=>{
   else if(a==="testai"){const r=await call("act",{type:"test_ai"});note=(r.j.ok?"✅ ":"❌ ")+(r.j.detail||"No response.");render()}
 });
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&D){if(Date.now()-last>idleMs){call("logout",{});lock();err("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}else refresh(true)}});
-show("#login",false);enter(); // already signed in (valid session cookie)? go straight to the dashboard
+show("#login",false);enter();
 })();
