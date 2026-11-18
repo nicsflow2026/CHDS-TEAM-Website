@@ -1,1 +1,13 @@
-{ "name": "chds-site", "private": true, "type": "module", "engines": { "node": ">=20" } }
+{
+  "name": "chds-site",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test tests/unit.test.mjs tests/api.test.mjs",
+    "test:visual": "node scripts/dev-server.mjs --fake & sleep 2 && python3 tests/visual/run_visual.py; kill %1",
+    "dev": "node scripts/dev-server.mjs",
+    "build:sql": "node scripts/build-sql.mjs"
+  }
+}
