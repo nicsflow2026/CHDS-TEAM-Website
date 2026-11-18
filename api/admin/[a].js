@@ -1,7 +1,7 @@
 // Admin panel API. Security: password + Telegram one-time code (2FA), server-side sessions (hashed token in DB),
 // HttpOnly + Secure + SameSite=Strict cookie, CSRF header + Origin check, rate limits, audit log.
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
-import { api, E, sb, rpc, tg, say, closeNotifs, ids, num, UID, SID, RID, clientIp, limited, hit, jsonBody, statsData, audit, aiChat, aiModels } from "../../lib/core.js";
+import { api, E, sb, rpc, tg, say, closeNotifs, ids, num, UID, SID, RID, clientIp, limited, hit, jsonBody, statsData, audit, aiChat, aiModels, cur } from "../../lib/core.js";
 import { COMMANDS, parseDate } from "../../lib/bot.js";
 
 const COOKIE = "__Host-chds_admin";
@@ -14,11 +14,18 @@ const iso = t => encodeURIComponent(new Date(t).toISOString());
 const cookies = req => Object.fromEntries(String(req.headers.cookie || "").split(";").map(c => { const i = c.indexOf("="); return [c.slice(0, i).trim(), c.slice(i + 1).trim()]; }));
 const setCookie = (res, v, age) => res.setHeader("Set-Cookie", `${COOKIE}=${v}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${age}`);
 
-async function session(req) {
+// Sliding idle timeout (default 10 min, ADMIN_IDLE_MIN to change) + absolute limit of 8 h.
+const IDLE = () => Math.max(1, Math.min(120, Number(E.ADMIN_IDLE_MIN) || 10)) * 6e4, ABS = 8 * 36e5;
+async function session(req, touch) {
   const t = cookies(req)[COOKIE];
   if (!t || !/^[a-f0-9]{64}$/.test(t)) return null;
-  const r = (await sb(`/admin_sessions?id=eq.${hex(t)}&expires_at=gt.${iso(Date.now())}&select=uid`))[0];
-  return r && ids(E.ADMIN_UIDS).has(r.uid) ? { uid: r.uid, tok: t } : null;
+  const r = (await sb(`/admin_sessions?id=eq.${hex(t)}&expires_at=gt.${iso(Date.now())}&select=uid,created_at,expires_at`))[0];
+  if (!r || !ids(E.ADMIN_UIDS).has(r.uid) || Date.parse(r.created_at) + ABS < Date.now()) return null;
+  if (touch) { // activity extends the session; background polling does not
+    const next = Math.min(Date.now() + IDLE(), Date.parse(r.created_at) + ABS);
+    if (next - Date.parse(r.expires_at) > 15000) await sb(`/admin_sessions?id=eq.${hex(t)}`, { method: "PATCH", body: { expires_at: new Date(next).toISOString() }, prefer: "return=minimal" }).catch(e => console.error("touch", e));
+  }
+  return { uid: r.uid, tok: t };
 }
 
 export default api(async (req, res) => {
@@ -55,15 +62,17 @@ export default api(async (req, res) => {
     if (!same(hex(code + u), row.code_hash)) { await sb(`/admin_otps?uid=eq.${u}`, { method: "PATCH", body: { attempts: row.attempts + 1 } }); await audit(u, "login_failed", { ip: clientIp(req) }); return fail(401, "invalid"); }
     await sb(`/admin_otps?uid=eq.${u}`, { method: "DELETE" });
     const tok = randomBytes(32).toString("hex");
-    await sb("/admin_sessions", { method: "POST", body: { id: hex(tok), uid: u, ip: clientIp(req), expires_at: new Date(Date.now() + 8 * 36e5).toISOString() }, prefer: "return=minimal" });
+    await sb("/admin_sessions", { method: "POST", body: { id: hex(tok), uid: u, ip: clientIp(req), expires_at: new Date(Date.now() + IDLE()).toISOString() }, prefer: "return=minimal" });
     setCookie(res, tok, 28800);
     await audit(u, "login", { ip: clientIp(req) });
     await say(u, `✅ <b>Admin login successful</b>\nIP ${clientIp(req)}. If this was not you, change ADMIN_PASSWORD and run Sign out everywhere.`);
     return res.json({ ok: true });
   }
 
-  const ses = await session(req);
+  const ses = await session(req, !(a === "overview" && req.query.quiet === "1"));
   if (!ses) return fail(401, "unauthorized");
+
+  if (a === "ping") return res.json({ ok: true, idle_ms: IDLE() });
 
   if (a === "logout" && post) {
     const all = b.all === true;
@@ -79,7 +88,7 @@ export default api(async (req, res) => {
       sb("/audit_log?order=id.desc&limit=60&select=*"), tg("getWebhookInfo", {})
     ]);
     return res.json({
-      me: ses.uid, cur: E.CURRENCY || "$", stats, reports, pending: pending.length, audit: log,
+      me: ses.uid, idle_ms: IDLE(), cur: cur(), stats, reports, pending: pending.length, audit: log,
       chats: chats.map(c => ({ sid: c.sid, name: c.name, status: c.status, updated_at: c.updated_at, agents: Object.values(c.joined || {}) })),
       sys: { groq_key: !!E.GROQ_API_KEY, groq_model: aiModels().join(", "), bot_token: !!E.BOT_TOKEN, webhook_secret: !!E.WEBHOOK_SECRET, team_uids: ids(E.ALLOWED_UIDS).size, admin_uids: ids(E.ADMIN_UIDS).size, webhook_url: wh.result?.url || "", webhook_pending: wh.result?.pending_update_count ?? null, webhook_error: wh.result?.last_error_message || "" }
     });
