@@ -185,3 +185,6 @@ do $$ declare f record; begin
     execute 'grant execute on function ' || f.sig || ' to service_role';
   end loop;
 end $$;
+
+-- Make the API see new tables/functions immediately (fixes: "Could not find the table 'public.admin_otps' in the schema cache")
+notify pgrst, 'reload schema';

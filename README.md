@@ -6,7 +6,7 @@ Pages: / (home + live results) · /services · /team · /faq · /contact · /hel
 public/            website (pages + assets/). Edit TEAM and CONFIG in public/assets/config.js
 api/               Vercel serverless API (stats, chat, human chat, telegram webhook, admin, health, setup)
 lib/               shared code + the Telegram bot
-supabase.sql       database schema (run once)
+supabase.sql       database schema (run in full, safe to re-run after every update)
 
 ## Setup (10 minutes)
 1. Supabase: create a project -> SQL Editor -> paste ALL of supabase.sql -> Run.
@@ -25,6 +25,9 @@ HttpOnly + Secure + SameSite=Strict cookie, CSRF header + same-origin check, rat
 audit log of every action, "Sign out everywhere". Rotate ADMIN_PASSWORD and SESSION_SECRET if you suspect a leak.
 
 ## Troubleshooting
+- AI models: openai/gpt-oss-120b, falling back to openai/gpt-oss-20b (Groq). Delete the old GROQ_MODEL variable in Vercel.
+- "Could not find the table public.admin_otps in the schema cache" / admin login fails: paste ALL of supabase.sql into Supabase -> SQL Editor -> Run again, then open /api/health (database_ok must be true).
+- Chat says "unavailable": leave API:"" in public/assets/config.js on Vercel, then check /api/health and Admin -> Test AI.
 - AI not answering: /api/health, or Admin -> Overview -> Test AI. Vercel -> Logs shows the exact Groq/Supabase error.
 - No chat alerts: members must press /start in the bot, and their UID must be in ALLOWED_UIDS or ADMIN_UIDS.
 - Admin code not arriving: your UID must be in ADMIN_UIDS and you must have pressed /start in the bot.
