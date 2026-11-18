@@ -1,0 +1,1245 @@
+-- =====================================================================================
+-- CHDS 002 — Platform upgrade (RBAC, AI identity, AI→human handoff, team, reports,
+-- revenue, announcements, emergency control, security, backups).
+--
+-- Requires 001_original_schema.sql (the previous supabase.sql) to have been applied.
+-- ADDITIVE and IDEMPOTENT: no table is dropped, no column is dropped, no existing row is
+-- deleted. Safe to re-run. Take a backup first (see docs/DATABASE.md, "Before migrating").
+-- =====================================================================================
+
+-- ---------------------------------------------------------------------------------
+-- 0. Behaviour changes to existing objects (documented in docs/DATABASE.md)
+-- ---------------------------------------------------------------------------------
+-- reports: rejected reports are now kept (status 'rejected') instead of deleted; deletions
+-- are soft (deleted_at). The status check is widened, never narrowed.
+alter table public.reports add column if not exists title text;
+alter table public.reports add column if not exists description text;
+alter table public.reports add column if not exists category text;
+alter table public.reports add column if not exists additional_info text;
+alter table public.reports add column if not exists submitted_by text;
+alter table public.reports add column if not exists source text not null default 'telegram';
+alter table public.reports add column if not exists reviewed_by text;
+alter table public.reports add column if not exists reviewed_at timestamptz;
+alter table public.reports add column if not exists review_note text;
+alter table public.reports add column if not exists rejection_reason text;
+alter table public.reports add column if not exists updated_at timestamptz not null default now();
+alter table public.reports add column if not exists deleted_at timestamptz;
+alter table public.reports add column if not exists deleted_by text;
+alter table public.reports add column if not exists dedupe_key text;
+alter table public.reports drop constraint if exists reports_status_check;
+alter table public.reports add constraint reports_status_check check (status in ('pending','reviewed','approved','rejected'));
+alter table public.reports drop constraint if exists reports_source_check;
+alter table public.reports add constraint reports_source_check check (source in ('telegram','dashboard','admin'));
+alter table public.reports drop constraint if exists reports_title_len;
+alter table public.reports add constraint reports_title_len check (title is null or char_length(title) between 3 and 120);
+alter table public.reports drop constraint if exists reports_desc_len;
+alter table public.reports add constraint reports_desc_len check (description is null or char_length(description) <= 4000);
+create unique index if not exists reports_dedupe on public.reports (dedupe_key) where dedupe_key is not null and deleted_at is null;
+create index if not exists reports_status_date on public.reports (status, report_date) where deleted_at is null;
+
+-- human support rooms: link to AI identity / conversation / handoff, single owner
+alter table public.sessions add column if not exists ai_user_id uuid;
+alter table public.sessions add column if not exists conversation_id uuid;
+alter table public.sessions add column if not exists request_id text;
+alter table public.sessions add column if not exists owner_uid text;
+alter table public.sessions add column if not exists owner_name text;
+create index if not exists sessions_open on public.sessions (status, updated_at) where status <> 'ended';
+
+-- agents: availability for the waiting queue (/online, /offline in the bot)
+alter table public.agents add column if not exists available boolean not null default true;
+alter table public.agents add column if not exists available_at timestamptz;
+
+-- admin sessions: device info, activity, revocation, re-authentication, rotation
+alter table public.admin_sessions add column if not exists user_agent text;
+alter table public.admin_sessions add column if not exists device text;
+alter table public.admin_sessions add column if not exists last_seen_at timestamptz;
+alter table public.admin_sessions add column if not exists revoked_at timestamptz;
+alter table public.admin_sessions add column if not exists revoked_by text;
+alter table public.admin_sessions add column if not exists revoke_reason text;
+alter table public.admin_sessions add column if not exists reauth_at timestamptz;
+alter table public.admin_sessions add column if not exists rotated_from text;
+create index if not exists admin_sessions_uid on public.admin_sessions (uid, created_at desc);
+
+-- audit log: target, before/after values and request metadata; append-only (see trigger)
+alter table public.audit_log add column if not exists target text;
+alter table public.audit_log add column if not exists prev jsonb;
+alter table public.audit_log add column if not exists next jsonb;
+alter table public.audit_log add column if not exists ip text;
+alter table public.audit_log add column if not exists user_agent text;
+alter table public.audit_log add column if not exists request_id text;
+create index if not exists audit_log_at on public.audit_log (at desc);
+create index if not exists audit_log_actor on public.audit_log (actor, at desc);
+create index if not exists audit_log_action on public.audit_log (action, at desc);
+
+-- ---------------------------------------------------------------------------------
+-- 1. Settings, emergency flags
+-- ---------------------------------------------------------------------------------
+create table if not exists public.system_settings (
+  key text primary key,
+  value jsonb not null,
+  updated_by text,
+  updated_at timestamptz not null default now()
+);
+insert into public.system_settings (key, value) values
+  ('emergency', '{"maintenance_mode":false,"human_requests_disabled":false,"reports_disabled":false,"revenue_edits_locked":false,"telegram_notifications_disabled":false,"ai_disabled":false}'),
+  ('support',   '{"request_limit":3,"cooldown_minutes":60,"handoff_after_failures":2}'),
+  ('site',      '{"announcement_banner":true}')
+on conflict (key) do nothing;
+
+-- ---------------------------------------------------------------------------------
+-- 2. Roles and permissions
+-- ---------------------------------------------------------------------------------
+create table if not exists public.permissions (key text primary key, description text not null);
+insert into public.permissions (key, description) values
+  ('manage_users','Search, suspend, restore and annotate staff accounts'),
+  ('manage_ai_support','Annotate, flag and block AI Support visitors'),
+  ('view_ai_conversations','Read AI Support conversations, handoffs and analytics'),
+  ('manage_team','Add, edit, deactivate team members and photos'),
+  ('manage_reports','Submit, edit and remove reports for any member'),
+  ('approve_reports','Review, approve and reject reports'),
+  ('manage_revenue','Create, edit, verify and reject revenue records'),
+  ('view_revenue','View revenue, analytics and team performance'),
+  ('manage_support','Accept and handle Human Support requests'),
+  ('manage_admins','Create staff accounts and assign roles and permissions'),
+  ('manage_roles','Create and edit roles'),
+  ('manage_announcements','Publish and archive announcements'),
+  ('manage_settings','Change system settings'),
+  ('view_audit_logs','Read the audit log'),
+  ('manage_backups','Create and download backups and exports'),
+  ('manage_security','Security Center and session management'),
+  ('view_system_health','System Health dashboard'),
+  ('manage_system','Emergency Control and integration actions')
+on conflict (key) do update set description = excluded.description;
+
+create table if not exists public.roles (
+  id text primary key check (id ~ '^[a-z][a-z0-9_]{1,39}$'),
+  name text not null check (char_length(name) between 2 and 60),
+  description text not null default '' check (char_length(description) <= 300),
+  permissions text[] not null default '{}',
+  scope text not null default 'all' check (scope in ('all','team')),
+  is_system boolean not null default false,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  deleted_at timestamptz
+);
+insert into public.roles (id, name, description, permissions, scope, is_system) values
+  ('founder','Founder / Super Admin','Full access to the entire platform.',
+    (select array_agg(key order by key) from public.permissions),'all',true),
+  ('administrator','Administrator','Access only to the permissions assigned by the Founder.','{}','all',true),
+  ('team_leader','Team Leader','Assigned team members, their reports and performance.','{approve_reports,view_revenue}','team',true),
+  ('support_agent','Support Agent','Human Support functions.','{manage_support,view_ai_conversations}','all',true)
+on conflict (id) do nothing;
+-- founder always holds every permission (also new ones added later)
+update public.roles set permissions = (select array_agg(key order by key) from public.permissions) where id = 'founder';
+
+create table if not exists public.admin_users (
+  uid text primary key check (uid ~ '^\d{1,20}$'),
+  display_name text not null check (char_length(btrim(display_name)) between 1 and 60),
+  role_id text not null references public.roles(id),
+  grants text[] not null default '{}',
+  status text not null default 'active' check (status in ('active','suspended','banned')),
+  status_reason text,
+  password_hash text,
+  password_changed_at timestamptz,
+  team_member_id uuid,
+  source text not null default 'db' check (source in ('db','env')),
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  last_login_at timestamptz,
+  last_seen_at timestamptz,
+  deleted_at timestamptz
+);
+
+create or replace function public.check_permission_keys() returns trigger language plpgsql as $$
+declare bad text;
+begin
+  select k into bad from jsonb_array_elements_text(to_jsonb(new) -> (case when tg_table_name = 'roles' then 'permissions' else 'grants' end)) k
+   where k not in (select key from public.permissions) limit 1;
+  if bad is not null then raise exception 'unknown permission %', bad using errcode = '22023'; end if;
+  return new;
+end $$;
+drop trigger if exists roles_perm_check on public.roles;
+create trigger roles_perm_check before insert or update on public.roles for each row execute function public.check_permission_keys();
+drop trigger if exists admin_users_perm_check on public.admin_users;
+create trigger admin_users_perm_check before insert or update on public.admin_users for each row execute function public.check_permission_keys();
+
+-- ---------------------------------------------------------------------------------
+-- 3. Team management
+-- ---------------------------------------------------------------------------------
+create table if not exists public.team_members (
+  id uuid primary key default gen_random_uuid(),
+  display_name text not null check (char_length(btrim(display_name)) between 1 and 60),
+  role_title text not null default 'Member' check (char_length(role_title) between 1 and 60),
+  member_group text not null default 'member' check (member_group in ('founder','admin','member')),
+  telegram_username text check (telegram_username is null or telegram_username ~ '^[A-Za-z0-9_]{4,32}$'),
+  telegram_uid text check (telegram_uid is null or telegram_uid ~ '^\d{1,20}$'),
+  facebook_url text check (facebook_url is null or facebook_url ~* '^https://([a-z0-9-]+\.)*(facebook\.com|fb\.com)/[^\s<>"'']*$'),
+  photo_path text,
+  bio text not null default '' check (char_length(bio) <= 400),
+  display_order int not null default 100 check (display_order between 0 and 100000),
+  status text not null default 'active' check (status in ('active','inactive')),
+  is_public boolean not null default true,
+  show_telegram boolean not null default true,
+  leader_id uuid references public.team_members(id),
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  deleted_at timestamptz
+);
+create unique index if not exists team_members_tg_uid on public.team_members (telegram_uid) where telegram_uid is not null and deleted_at is null;
+create index if not exists team_members_order on public.team_members (display_order, display_name) where deleted_at is null;
+do $$ begin
+  alter table public.admin_users add constraint admin_users_team_member_fk foreign key (team_member_id) references public.team_members(id);
+exception when duplicate_object then null; end $$;
+
+-- Seed: the only real person in the old public/assets/config.js. The "Admin N" / "Member N"
+-- placeholders were not real people and are intentionally NOT migrated.
+insert into public.team_members (display_name, role_title, member_group, telegram_username, display_order)
+select 'Charles Amper', 'Founder', 'founder', 'chproofs', 0
+where not exists (select 1 from public.team_members);
+
+alter table public.reports add column if not exists team_member_id uuid references public.team_members(id);
+create index if not exists reports_member on public.reports (team_member_id, report_date) where deleted_at is null;
+
+-- When a member's Telegram UID is set, link their existing reports/revenue (exact UID match only)
+create or replace function public.team_member_link() returns trigger language plpgsql as $$
+begin
+  if new.telegram_uid is not null and new.deleted_at is null and (tg_op = 'INSERT' or new.telegram_uid is distinct from old.telegram_uid) then
+    update public.reports set team_member_id = new.id where uid = new.telegram_uid and team_member_id is null;
+    update public.revenue_records set team_member_id = new.id where member_uid = new.telegram_uid and team_member_id is null;
+  end if;
+  return null;
+end $$;
+create or replace function public.touch_updated_at() returns trigger language plpgsql as $$
+begin new.updated_at := now(); return new; end $$;
+
+-- ---------------------------------------------------------------------------------
+-- 4. Reports: evidence + history
+-- ---------------------------------------------------------------------------------
+create table if not exists public.report_evidence (
+  id bigint generated always as identity primary key,
+  report_id text not null references public.reports(id),
+  path text not null unique,
+  mime text not null,
+  size_bytes int not null check (size_bytes > 0),
+  sha256 text not null,
+  uploaded_by text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists report_evidence_report on public.report_evidence (report_id);
+
+create table if not exists public.report_history (
+  id bigint generated always as identity primary key,
+  report_id text not null,
+  actor text not null,
+  action text not null,
+  from_status text,
+  to_status text,
+  changes jsonb not null default '{}',
+  reason text,
+  at timestamptz not null default now()
+);
+create index if not exists report_history_report on public.report_history (report_id, id);
+
+-- ---------------------------------------------------------------------------------
+-- 5. Revenue
+-- ---------------------------------------------------------------------------------
+create table if not exists public.revenue_records (
+  id text primary key check (id ~ '^RV[A-Z0-9]{6,12}$'),
+  team_member_id uuid references public.team_members(id),
+  member_uid text,
+  member_name text,
+  report_id text unique references public.reports(id),
+  amount numeric(12,2) not null check (amount >= 0 and amount <= 10000000),
+  revenue_date date not null check (revenue_date >= date '2020-01-01' and revenue_date <= date '2100-12-31'),
+  description text not null default '' check (char_length(description) <= 500),
+  status text not null check (status in ('actual','pending','projected','rejected')),
+  source text not null default 'manual' check (source in ('manual','report')),
+  verified_by text,
+  verified_at timestamptz,
+  rejection_reason text,
+  dedupe_key text,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  deleted_at timestamptz
+);
+create unique index if not exists revenue_dedupe on public.revenue_records (dedupe_key) where dedupe_key is not null and deleted_at is null;
+create index if not exists revenue_date_idx on public.revenue_records (revenue_date, status) where deleted_at is null;
+create index if not exists revenue_member_idx on public.revenue_records (team_member_id, revenue_date) where deleted_at is null;
+
+create table if not exists public.revenue_history (
+  id bigint generated always as identity primary key,
+  record_id text not null,
+  actor text not null,
+  action text not null,
+  old jsonb,
+  new jsonb,
+  reason text,
+  at timestamptz not null default now()
+);
+create index if not exists revenue_history_record on public.revenue_history (record_id, id);
+
+drop trigger if exists team_member_link on public.team_members;
+create trigger team_member_link after insert or update on public.team_members for each row execute function public.team_member_link();
+drop trigger if exists team_members_touch on public.team_members;
+create trigger team_members_touch before update on public.team_members for each row execute function public.touch_updated_at();
+
+-- ---------------------------------------------------------------------------------
+-- 6. AI Support identity, conversations, messages
+-- ---------------------------------------------------------------------------------
+create table if not exists public.ai_support_users (
+  id uuid primary key default gen_random_uuid(),
+  display_name text not null check (char_length(display_name) between 2 and 60),
+  status text not null default 'active' check (status in ('active','blocked')),
+  status_reason text,
+  flags text[] not null default '{}',
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists ai_users_name on public.ai_support_users (lower(display_name));
+create index if not exists ai_users_seen on public.ai_support_users (last_seen_at desc);
+
+create table if not exists public.ai_support_sessions (
+  token_hash text primary key check (token_hash ~ '^[a-f0-9]{64}$'),
+  user_id uuid not null references public.ai_support_users(id),
+  ip text,
+  user_agent text,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  revoked_at timestamptz
+);
+create index if not exists ai_sessions_user on public.ai_support_sessions (user_id);
+
+create table if not exists public.ai_support_conversations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.ai_support_users(id),
+  status text not null default 'active' check (status in ('active','awaiting_confirmation','resolved','handoff','closed')),
+  owner text not null default 'ai' check (owner in ('ai','human')),
+  category text,
+  title text,
+  failure_count int not null default 0,
+  message_count int not null default 0,
+  resolved_at timestamptz,
+  resolved_by text,
+  human_sid text references public.sessions(sid),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  last_message_at timestamptz
+);
+create index if not exists ai_conv_user on public.ai_support_conversations (user_id, updated_at desc);
+create index if not exists ai_conv_status on public.ai_support_conversations (status, updated_at desc);
+
+create table if not exists public.ai_support_messages (
+  id bigint generated always as identity primary key,
+  conversation_id uuid not null references public.ai_support_conversations(id),
+  user_id uuid not null references public.ai_support_users(id),
+  role text not null check (role in ('user','assistant','agent','system','summary','note')),
+  author text,
+  body text not null check (char_length(body) between 1 and 8000),
+  meta jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+create index if not exists ai_msgs_conv on public.ai_support_messages (conversation_id, id);
+
+create or replace function public.ai_message_touch() returns trigger language plpgsql as $$
+begin
+  update public.ai_support_conversations
+     set message_count = message_count + case when new.role in ('user','assistant','agent') then 1 else 0 end,
+         last_message_at = new.created_at, updated_at = now()
+   where id = new.conversation_id;
+  if new.role = 'user' then update public.ai_support_users set last_seen_at = now() where id = new.user_id; end if;
+  return new;
+end $$;
+drop trigger if exists ai_message_touch on public.ai_support_messages;
+create trigger ai_message_touch after insert on public.ai_support_messages for each row execute function public.ai_message_touch();
+
+-- ---------------------------------------------------------------------------------
+-- 7. Handoff requests (AI → Human Support)
+-- ---------------------------------------------------------------------------------
+create table if not exists public.ai_handoff_requests (
+  id text primary key check (id ~ '^HS-[A-Z0-9]{8}$'),
+  conversation_id uuid not null references public.ai_support_conversations(id),
+  user_id uuid not null references public.ai_support_users(id),
+  sid text not null unique references public.sessions(sid),
+  status text not null default 'waiting' check (status in ('waiting','assigned','in_progress','waiting_customer','resolved','closed','cancelled')),
+  reason text not null,
+  reason_detail text,
+  category text,
+  summary jsonb not null default '{}',
+  idempotency_key text unique,
+  assigned_uid text,
+  assigned_name text,
+  assigned_at timestamptz,
+  first_response_at timestamptz,
+  resolved_at timestamptz,
+  closed_at timestamptz,
+  cancelled_at timestamptz,
+  agent_summary text,
+  unresolved_tasks text,
+  notified_count int not null default 0,
+  notify_failed int not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists ai_handoff_one_open on public.ai_handoff_requests (conversation_id)
+  where status in ('waiting','assigned','in_progress','waiting_customer');
+create index if not exists ai_handoff_status on public.ai_handoff_requests (status, created_at);
+
+create table if not exists public.ai_handoff_history (
+  id bigint generated always as identity primary key,
+  request_id text not null references public.ai_handoff_requests(id),
+  actor text not null,
+  action text not null,
+  from_status text,
+  to_status text,
+  detail jsonb not null default '{}',
+  at timestamptz not null default now()
+);
+create index if not exists ai_handoff_history_req on public.ai_handoff_history (request_id, id);
+
+-- Mirror human-room messages into the AI conversation transcript and keep handoff status current
+create or replace function public.messages_mirror() returns trigger language plpgsql as $$
+declare s public.sessions; h public.ai_handoff_requests;
+begin
+  select * into s from public.sessions where sid = new.sid;
+  if s.conversation_id is null then return new; end if;
+  insert into public.ai_support_messages (conversation_id, user_id, role, author, body, meta)
+  values (s.conversation_id, s.ai_user_id, case new.sender when 'user' then 'user' when 'agent' then 'agent' else 'system' end,
+          new.author, left(new.body, 8000), jsonb_build_object('sid', new.sid, 'msg_id', new.id, 'channel', 'human'));
+  if s.request_id is not null then
+    select * into h from public.ai_handoff_requests where id = s.request_id for update;
+    if new.sender = 'agent' and h.status in ('assigned','in_progress') then
+      update public.ai_handoff_requests set status = 'waiting_customer', first_response_at = coalesce(first_response_at, now()), updated_at = now() where id = h.id;
+      insert into public.ai_handoff_history (request_id, actor, action, from_status, to_status) values (h.id, 'system', 'status', h.status, 'waiting_customer');
+    elsif new.sender = 'user' and h.status in ('assigned','waiting_customer') then
+      update public.ai_handoff_requests set status = 'in_progress', updated_at = now() where id = h.id;
+      insert into public.ai_handoff_history (request_id, actor, action, from_status, to_status) values (h.id, 'system', 'status', h.status, 'in_progress');
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists messages_mirror on public.messages;
+create trigger messages_mirror after insert on public.messages for each row execute function public.messages_mirror();
+
+-- ---------------------------------------------------------------------------------
+-- 8. Notifications, rate limits, security, sessions, misc
+-- ---------------------------------------------------------------------------------
+create table if not exists public.notification_log (
+  id bigint generated always as identity primary key,
+  kind text not null,
+  ref text not null,
+  chat_id text not null,
+  status text not null default 'sending' check (status in ('sending','sent','failed')),
+  message_id bigint,
+  attempts int not null default 0,
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (kind, ref, chat_id)
+);
+create index if not exists notification_failed on public.notification_log (status, updated_at) where status <> 'sent';
+
+create table if not exists public.support_rate_limits (
+  key text primary key,
+  used int not null default 0,
+  window_start timestamptz not null default now(),
+  cooldown_until timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.security_events (
+  id bigint generated always as identity primary key,
+  at timestamptz not null default now(),
+  type text not null,
+  severity text not null default 'info' check (severity in ('info','warning','critical')),
+  actor text,
+  ip text,
+  user_agent text,
+  detail jsonb not null default '{}'
+);
+create index if not exists security_events_at on public.security_events (at desc);
+create index if not exists security_events_type on public.security_events (type, at desc);
+
+create table if not exists public.login_guards (
+  key text primary key,
+  fails int not null default 0,
+  locked_until timestamptz,
+  last_fail_at timestamptz
+);
+
+create table if not exists public.internal_notes (
+  id bigint generated always as identity primary key,
+  subject_type text not null check (subject_type in ('staff','visitor','conversation','handoff','report','team_member')),
+  subject_id text not null,
+  author text not null,
+  body text not null check (char_length(body) between 1 and 2000),
+  created_at timestamptz not null default now()
+);
+create index if not exists internal_notes_subject on public.internal_notes (subject_type, subject_id, id desc);
+
+create table if not exists public.announcements (
+  id uuid primary key default gen_random_uuid(),
+  title text not null check (char_length(title) between 3 and 120),
+  message text not null check (char_length(message) between 1 and 4000),
+  priority text not null default 'normal' check (priority in ('low','normal','high','critical')),
+  audience text not null check (audience in ('all','team','selected_members','admins','groups')),
+  target_ids text[] not null default '{}',
+  publish_at timestamptz not null default now(),
+  expires_at timestamptz,
+  status text not null default 'draft' check (status in ('draft','published','archived')),
+  send_telegram boolean not null default false,
+  created_by text not null,
+  updated_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (expires_at is null or expires_at > publish_at)
+);
+create index if not exists announcements_live on public.announcements (status, publish_at desc);
+
+create table if not exists public.backups (
+  id text primary key check (id ~ '^BK-[0-9A-Z]{8,14}$'),
+  kind text not null check (kind in ('full_export','dataset_export')),
+  status text not null default 'running' check (status in ('running','completed','verified','failed')),
+  path text,
+  size_bytes bigint,
+  sha256 text,
+  row_counts jsonb not null default '{}',
+  error text,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  completed_at timestamptz,
+  verified_at timestamptz
+);
+
+create table if not exists public.app_errors (
+  id bigint generated always as identity primary key,
+  at timestamptz not null default now(),
+  route text not null,
+  message text not null,
+  detail jsonb not null default '{}'
+);
+create index if not exists app_errors_at on public.app_errors (at desc);
+
+-- ---------------------------------------------------------------------------------
+-- 9. Audit log is append-only (no UPDATE / DELETE / TRUNCATE through the API)
+-- ---------------------------------------------------------------------------------
+create or replace function public.audit_log_immutable() returns trigger language plpgsql as $$
+begin
+  raise exception 'audit_log is append-only' using errcode = '42501';
+end $$;
+drop trigger if exists audit_log_no_update on public.audit_log;
+create trigger audit_log_no_update before update or delete on public.audit_log for each row execute function public.audit_log_immutable();
+drop trigger if exists audit_log_no_truncate on public.audit_log;
+create trigger audit_log_no_truncate before truncate on public.audit_log for each statement execute function public.audit_log_immutable();
+-- History tables are append-only too
+drop trigger if exists report_history_no_update on public.report_history;
+create trigger report_history_no_update before update or delete on public.report_history for each row execute function public.audit_log_immutable();
+drop trigger if exists revenue_history_no_update on public.revenue_history;
+create trigger revenue_history_no_update before update or delete on public.revenue_history for each row execute function public.audit_log_immutable();
+drop trigger if exists handoff_history_no_update on public.ai_handoff_history;
+create trigger handoff_history_no_update before update or delete on public.ai_handoff_history for each row execute function public.audit_log_immutable();
+
+-- ---------------------------------------------------------------------------------
+-- 10. Report/revenue history triggers (actor comes from set_config('chds.actor') in RPCs)
+-- ---------------------------------------------------------------------------------
+create or replace function public.chds_actor(fallback text) returns text language sql stable as $$
+  select coalesce(nullif(current_setting('chds.actor', true), ''), fallback)
+$$;
+create or replace function public.chds_reason() returns text language sql stable as $$
+  select nullif(current_setting('chds.reason', true), '')
+$$;
+
+create or replace function public.reports_before() returns trigger language plpgsql as $$
+begin
+  if new.team_member_id is null then
+    select id into new.team_member_id from public.team_members where telegram_uid = new.uid and deleted_at is null limit 1;
+  end if;
+  if tg_op = 'INSERT' and new.title is not null and new.dedupe_key is null then
+    new.dedupe_key := md5(concat_ws('|', coalesce(new.team_member_id::text, new.uid), new.report_date, new.recovered, new.revenue, lower(btrim(new.title))));
+  end if;
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists reports_before on public.reports;
+create trigger reports_before before insert or update on public.reports for each row execute function public.reports_before();
+
+create or replace function public.reports_after() returns trigger language plpgsql as $$
+declare st text; changes jsonb := '{}';
+begin
+  -- history
+  if tg_op = 'INSERT' then
+    insert into public.report_history (report_id, actor, action, to_status, changes)
+    values (new.id, public.chds_actor(coalesce(new.submitted_by, 'tg:' || new.uid)), 'created', new.status,
+            jsonb_build_object('recovered', new.recovered, 'revenue', new.revenue, 'report_date', new.report_date, 'source', new.source));
+  else
+    if new.deleted_at is not null and old.deleted_at is null then
+      insert into public.report_history (report_id, actor, action, from_status, to_status, reason)
+      values (new.id, public.chds_actor(coalesce(new.deleted_by, 'system')), 'deleted', old.status, new.status, public.chds_reason());
+    elsif new.status is distinct from old.status then
+      insert into public.report_history (report_id, actor, action, from_status, to_status, reason)
+      values (new.id, public.chds_actor(coalesce(new.reviewed_by, 'system')), 'status', old.status, new.status, coalesce(public.chds_reason(), new.rejection_reason));
+    end if;
+    select coalesce(jsonb_object_agg(k, jsonb_build_object('old', to_jsonb(old) -> k, 'new', to_jsonb(new) -> k)), '{}') into changes
+      from unnest(array['title','description','category','recovered','revenue','report_date','additional_info','team_member_id','name']) k
+     where (to_jsonb(old) -> k) is distinct from (to_jsonb(new) -> k);
+    if changes <> '{}' then
+      insert into public.report_history (report_id, actor, action, from_status, to_status, changes, reason)
+      values (new.id, public.chds_actor('system'), 'edited', old.status, new.status, changes, public.chds_reason());
+    end if;
+  end if;
+
+  -- revenue sync (one revenue record per report; reports are the source of truth for their revenue)
+  if new.report_date < date '2020-01-01' then return new; end if;
+  st := case when new.deleted_at is not null or coalesce(new.revenue, 0) <= 0 then null
+             when new.status = 'approved' then 'actual'
+             when new.status = 'rejected' then 'rejected'
+             else 'pending' end;
+  if st is null then
+    update public.revenue_records set deleted_at = now(), updated_at = now() where report_id = new.id and deleted_at is null;
+    return new;
+  end if;
+  insert into public.revenue_records (id, team_member_id, member_uid, member_name, report_id, amount, revenue_date, description, status, source,
+                                      verified_by, verified_at, rejection_reason, created_by)
+  values ('RV' || upper(substr(md5('report:' || new.id), 1, 10)), new.team_member_id, new.uid, new.name, new.id, new.revenue, new.report_date,
+          left(coalesce(new.title, 'Report ' || new.id), 500), st, 'report',
+          case when st = 'actual' then coalesce(new.reviewed_by, 'auto-approved') end,
+          case when st = 'actual' then coalesce(new.approved_at, now()) end,
+          case when st = 'rejected' then new.rejection_reason end,
+          coalesce(new.submitted_by, 'tg:' || new.uid))
+  on conflict (report_id) do update set
+    team_member_id = excluded.team_member_id, member_uid = excluded.member_uid, member_name = excluded.member_name,
+    amount = excluded.amount, revenue_date = excluded.revenue_date, description = excluded.description, status = excluded.status,
+    verified_by = excluded.verified_by, verified_at = excluded.verified_at, rejection_reason = excluded.rejection_reason,
+    deleted_at = null, updated_at = now();
+  return new;
+end $$;
+drop trigger if exists reports_after on public.reports;
+create trigger reports_after after insert or update on public.reports for each row execute function public.reports_after();
+
+create or replace function public.revenue_after() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'INSERT' then
+    insert into public.revenue_history (record_id, actor, action, new, reason)
+    values (new.id, public.chds_actor(coalesce(new.created_by, 'system')), 'created', to_jsonb(new) - 'dedupe_key', public.chds_reason());
+  elsif (to_jsonb(old) - 'updated_at') is distinct from (to_jsonb(new) - 'updated_at') then
+    insert into public.revenue_history (record_id, actor, action, old, new, reason)
+    values (new.id, public.chds_actor('system'),
+            case when new.deleted_at is not null and old.deleted_at is null then 'deleted'
+                 when new.status is distinct from old.status then 'status:' || new.status else 'edited' end,
+            to_jsonb(old) - 'dedupe_key', to_jsonb(new) - 'dedupe_key', public.chds_reason());
+  end if;
+  return new;
+end $$;
+drop trigger if exists revenue_after on public.revenue_records;
+create trigger revenue_after after insert or update on public.revenue_records for each row execute function public.revenue_after();
+
+-- Backfill revenue records from existing reports (historical data preserved; nothing invented)
+select set_config('chds.actor', 'system:migration-002', false);
+insert into public.revenue_records (id, team_member_id, member_uid, member_name, report_id, amount, revenue_date, description, status, source, verified_by, verified_at, created_by)
+select 'RV' || upper(substr(md5('report:' || r.id), 1, 10)), r.team_member_id, r.uid, r.name, r.id, r.revenue, r.report_date, 'Report ' || r.id,
+       case r.status when 'approved' then 'actual' when 'rejected' then 'rejected' else 'pending' end, 'report',
+       case when r.status = 'approved' then 'migrated' end, case when r.status = 'approved' then coalesce(r.approved_at, r.created_at) end, 'tg:' || r.uid
+  from public.reports r
+ where r.revenue > 0 and r.deleted_at is null and r.report_date >= date '2020-01-01'
+on conflict (report_id) do nothing;
+select set_config('chds.actor', '', false);
+
+-- ---------------------------------------------------------------------------------
+-- 11. Replaced / new functions
+-- ---------------------------------------------------------------------------------
+-- rate_hit: same signature and behaviour; housekeeping no longer deletes audit history,
+-- human-support rooms or their messages (those are now part of the permanent record).
+create or replace function public.rate_hit(p_key text, p_max int, p_win int) returns boolean language plpgsql as $$
+declare v int;
+begin
+  if random() < 0.02 then
+    delete from public.rate_limits where t < now() - interval '1 day';
+    delete from public.tg_updates where created_at < now() - interval '2 days';
+    delete from public.admin_otps where expires_at < now();
+    delete from public.admin_sessions where expires_at < now() - interval '30 days';
+    delete from public.login_guards where coalesce(locked_until, last_fail_at) < now() - interval '2 days';
+  end if;
+  insert into public.rate_limits(key, n, t) values (p_key, 1, now())
+  on conflict (key) do update set
+    n = case when public.rate_limits.t < now() - make_interval(secs => p_win) then 1 else public.rate_limits.n + 1 end,
+    t = case when public.rate_limits.t < now() - make_interval(secs => p_win) then now() else public.rate_limits.t end
+  returning n into v;
+  return v > p_max;
+end $$;
+
+-- Login guard with increasing cooldown. p_op: 'check' | 'fail' | 'success'
+create or replace function public.login_guard(p_keys text[], p_op text) returns jsonb language plpgsql as $$
+declare k text; g public.login_guards; wait int := 0; f int := 0;
+begin
+  foreach k in array p_keys loop
+    if p_op = 'success' then
+      delete from public.login_guards where key = k;
+    elsif p_op = 'fail' then
+      insert into public.login_guards (key, fails, last_fail_at) values (k, 1, now())
+      on conflict (key) do update set
+        fails = case when public.login_guards.last_fail_at < now() - interval '24 hours' then 1 else public.login_guards.fails + 1 end,
+        last_fail_at = now()
+      returning * into g;
+      if g.fails >= 5 then
+        update public.login_guards set locked_until = now() + make_interval(mins => least(power(2, g.fails - 5)::int, 1440)) where key = k returning * into g;
+      end if;
+      f := greatest(f, g.fails);
+    end if;
+    select * into g from public.login_guards where key = k;
+    if found and g.locked_until > now() then wait := greatest(wait, ceil(extract(epoch from g.locked_until - now()))::int); end if;
+  end loop;
+  return jsonb_build_object('locked', wait > 0, 'retry_after', wait, 'fails', f);
+end $$;
+
+-- Persistent Human Support quota: p_limit requests, then p_cooldown_min minutes cooldown.
+-- Counted per key (visitor identity AND client IP). p_consume=false only reads.
+create or replace function public.support_quota(p_keys text[], p_limit int, p_cooldown_min int, p_consume boolean) returns jsonb language plpgsql as $$
+declare k text; r public.support_rate_limits; wait int := 0; rem int := p_limit;
+begin
+  foreach k in array p_keys loop
+    insert into public.support_rate_limits (key) values (k) on conflict (key) do nothing;
+    select * into r from public.support_rate_limits where key = k for update;
+    if r.cooldown_until is not null and r.cooldown_until <= now() then
+      update public.support_rate_limits set used = 0, cooldown_until = null, window_start = now(), updated_at = now() where key = k returning * into r;
+    elsif r.cooldown_until is null and r.window_start < now() - make_interval(mins => p_cooldown_min) then
+      update public.support_rate_limits set used = 0, window_start = now(), updated_at = now() where key = k returning * into r;
+    end if;
+    if r.cooldown_until is not null then wait := greatest(wait, ceil(extract(epoch from r.cooldown_until - now()))::int); end if;
+    rem := least(rem, greatest(p_limit - r.used, 0));
+  end loop;
+  if wait > 0 then return jsonb_build_object('allowed', false, 'retry_after', wait, 'remaining', 0, 'limit', p_limit); end if;
+  if p_consume then
+    foreach k in array p_keys loop
+      update public.support_rate_limits
+         set used = used + 1, updated_at = now(),
+             window_start = case when used = 0 then now() else window_start end,
+             cooldown_until = case when used + 1 >= p_limit then now() + make_interval(mins => p_cooldown_min) else null end
+       where key = k;
+    end loop;
+    rem := greatest(rem - 1, 0);
+  end if;
+  return jsonb_build_object('allowed', true, 'retry_after', case when p_consume and rem = 0 then p_cooldown_min * 60 else 0 end, 'remaining', rem, 'limit', p_limit);
+end $$;
+
+-- Notification de-duplication: claim before sending, record the result after.
+create or replace function public.notify_claim(p_kind text, p_ref text, p_chat text) returns boolean language plpgsql as $$
+declare n public.notification_log;
+begin
+  insert into public.notification_log (kind, ref, chat_id, status, attempts) values (p_kind, p_ref, p_chat, 'sending', 1)
+  on conflict (kind, ref, chat_id) do nothing returning * into n;
+  if found then return true; end if;
+  update public.notification_log set status = 'sending', attempts = attempts + 1, updated_at = now()
+   where kind = p_kind and ref = p_ref and chat_id = p_chat and attempts < 6
+     and (status = 'failed' or (status = 'sending' and updated_at < now() - interval '2 minutes'))
+  returning * into n;
+  return found;
+end $$;
+create or replace function public.notify_done(p_kind text, p_ref text, p_chat text, p_ok boolean, p_message_id bigint, p_error text) returns void language sql as $$
+  update public.notification_log set status = case when p_ok then 'sent' else 'failed' end, message_id = coalesce(p_message_id, message_id),
+         last_error = case when p_ok then null else left(p_error, 300) end, updated_at = now()
+   where kind = p_kind and ref = p_ref and chat_id = p_chat
+$$;
+
+-- Atomic handoff creation (idempotent; one open request per conversation; quota enforced here)
+create or replace function public.create_handoff(p jsonb) returns jsonb language plpgsql as $$
+declare c public.ai_support_conversations; h public.ai_handoff_requests; q jsonb; v_id text; v_sid text; v_name text;
+begin
+  select * into c from public.ai_support_conversations where id = (p->>'conversation_id')::uuid and user_id = (p->>'user_id')::uuid for update;
+  if not found then return jsonb_build_object('error', 'not_found'); end if;
+  select * into h from public.ai_handoff_requests where idempotency_key = p->>'idempotency_key';
+  if found then return jsonb_build_object('existing', true, 'id', h.id, 'sid', h.sid, 'status', h.status); end if;
+  select * into h from public.ai_handoff_requests where conversation_id = c.id and status in ('waiting','assigned','in_progress','waiting_customer');
+  if found then return jsonb_build_object('existing', true, 'id', h.id, 'sid', h.sid, 'status', h.status); end if;
+  q := public.support_quota(array(select jsonb_array_elements_text(p->'quota_keys')), (p->>'limit')::int, (p->>'cooldown_min')::int, true);
+  if not (q->>'allowed')::boolean then return jsonb_build_object('blocked', true, 'retry_after', (q->>'retry_after')::int, 'limit', (q->>'limit')::int); end if;
+  select display_name into v_name from public.ai_support_users where id = c.user_id;
+  v_id := p->>'id'; v_sid := p->>'sid';
+  insert into public.sessions (sid, name, status, joined, notif, ai_user_id, conversation_id, request_id)
+  values (v_sid, v_name, 'wait', '{}', '[]', c.user_id, c.id, v_id);
+  insert into public.ai_handoff_requests (id, conversation_id, user_id, sid, status, reason, reason_detail, category, summary, idempotency_key)
+  values (v_id, c.id, c.user_id, v_sid, 'waiting', p->>'reason', left(p->>'reason_detail', 500), p->>'category', coalesce(p->'summary', '{}'), p->>'idempotency_key');
+  insert into public.ai_handoff_history (request_id, actor, action, to_status, detail)
+  values (v_id, 'visitor:' || c.user_id, 'created', 'waiting', jsonb_build_object('reason', p->>'reason'));
+  update public.ai_support_conversations set owner = 'human', status = 'handoff', human_sid = v_sid,
+         category = coalesce(p->>'category', category), updated_at = now() where id = c.id;
+  insert into public.ai_support_messages (conversation_id, user_id, role, author, body, meta)
+  values (c.id, c.user_id, 'summary', 'CHDS AI (generated summary)', left(coalesce(p->'summary'->>'summary', '(no summary)'), 8000),
+          jsonb_build_object('kind', 'handoff_summary', 'request_id', v_id, 'summary', p->'summary'));
+  insert into public.messages (sid, sender, body) values (v_sid, 'sys', 'Request ' || v_id || ' sent to CHDS Human Support. Please wait for an agent to accept it. AI replies are paused for this conversation.');
+  return jsonb_build_object('existing', false, 'id', v_id, 'sid', v_sid, 'status', 'waiting', 'remaining', (q->>'remaining')::int, 'retry_after', (q->>'retry_after')::int);
+end $$;
+
+-- Accept a request: exactly one owner per room (row lock); legacy multi-agent rooms keep their first agent.
+create or replace function public.join_session(p_sid text, p_uid text, p_name text) returns jsonb language plpgsql as $$
+declare s public.sessions; h public.ai_handoff_requests; first_owner text;
+begin
+  select * into s from public.sessions where sid = p_sid for update;
+  if not found or s.status = 'ended' then return jsonb_build_object('ok', false, 'reason', 'ended'); end if;
+  if s.owner_uid is null and s.joined <> '{}'::jsonb then
+    select key into first_owner from jsonb_each_text(s.joined) limit 1;
+    if first_owner <> p_uid then return jsonb_build_object('ok', false, 'reason', 'taken', 'owner_name', s.joined ->> first_owner); end if;
+  end if;
+  if s.owner_uid is not null and s.owner_uid <> p_uid then
+    return jsonb_build_object('ok', false, 'reason', 'taken', 'owner_name', s.owner_name);
+  end if;
+  if s.owner_uid is null then
+    update public.sessions set owner_uid = p_uid, owner_name = p_name, joined = jsonb_build_object(p_uid, p_name), status = 'live', updated_at = now() where sid = p_sid;
+    insert into public.messages (sid, sender, body) values (p_sid, 'sys', p_name || ' from CHDS Support joined the chat.');
+    if s.request_id is not null then
+      select * into h from public.ai_handoff_requests where id = s.request_id for update;
+      if h.status = 'waiting' then
+        update public.ai_handoff_requests set status = 'assigned', assigned_uid = p_uid, assigned_name = p_name, assigned_at = now(), updated_at = now() where id = h.id;
+        insert into public.ai_handoff_history (request_id, actor, action, from_status, to_status, detail)
+        values (h.id, 'tg:' || p_uid, 'assigned', 'waiting', 'assigned', jsonb_build_object('agent', p_name));
+      end if;
+    end if;
+  else
+    update public.sessions set status = 'live', updated_at = now() where sid = p_sid;
+  end if;
+  insert into public.agents (uid, active_sid) values (p_uid, p_sid) on conflict (uid) do update set active_sid = excluded.active_sid;
+  return jsonb_build_object('ok', true, 'first', s.owner_uid is null, 'name', s.name, 'request_id', s.request_id, 'notif', s.notif,
+    'tail', coalesce((select jsonb_agg(body order by id) from (select id, body from public.messages where sid = p_sid and sender = 'user' order by id desc limit 5) t), '[]'::jsonb),
+    'others', '[]'::jsonb);
+end $$;
+
+-- Return a room to AI Support (owner or authorized admin). p_resolve=true marks the concern resolved.
+create or replace function public.return_to_ai(p_sid text, p_actor text, p_actor_uid text, p_force boolean, p_summary text, p_unresolved text, p_resolve boolean) returns jsonb language plpgsql as $$
+declare s public.sessions; h public.ai_handoff_requests; nm text; to_st text;
+begin
+  select * into s from public.sessions where sid = p_sid for update;
+  if not found or s.status = 'ended' then return jsonb_build_object('ok', false, 'reason', 'ended'); end if;
+  if not coalesce(p_force, false) and (p_actor_uid is null or (coalesce(s.owner_uid, '') <> p_actor_uid and not coalesce(s.joined ? p_actor_uid, false))) then
+    return jsonb_build_object('ok', false, 'reason', 'not_owner');
+  end if;
+  nm := coalesce(s.owner_name, s.joined ->> p_actor_uid, 'CHDS Support');
+  update public.sessions set status = 'ended', joined = '{}', updated_at = now() where sid = p_sid;
+  update public.agents set active_sid = null where active_sid = p_sid;
+  to_st := case when p_resolve then 'resolved' else 'closed' end;
+  if s.request_id is not null then
+    select * into h from public.ai_handoff_requests where id = s.request_id for update;
+    update public.ai_handoff_requests set status = case when h.status = 'waiting' then 'cancelled' else to_st end,
+           agent_summary = left(p_summary, 2000), unresolved_tasks = left(p_unresolved, 2000),
+           resolved_at = case when p_resolve then now() end, closed_at = now(),
+           cancelled_at = case when h.status = 'waiting' then now() end, updated_at = now()
+     where id = h.id;
+    insert into public.ai_handoff_history (request_id, actor, action, from_status, to_status, detail)
+    values (h.id, p_actor, case when p_resolve then 'resolved' else 'returned_to_ai' end, h.status,
+            case when h.status = 'waiting' then 'cancelled' else to_st end, jsonb_build_object('summary', left(p_summary, 500), 'unresolved', left(p_unresolved, 500)));
+  end if;
+  if s.conversation_id is not null then
+    if coalesce(p_summary, '') <> '' or coalesce(p_unresolved, '') <> '' then
+      insert into public.ai_support_messages (conversation_id, user_id, role, author, body, meta)
+      values (s.conversation_id, s.ai_user_id, 'note', nm || ' (CHDS agent handback note)',
+              left('Agent summary: ' || coalesce(nullif(p_summary, ''), '(none)') || E'\nUnresolved tasks: ' || coalesce(nullif(p_unresolved, ''), '(none)'), 8000),
+              jsonb_build_object('kind', 'agent_handback', 'request_id', s.request_id));
+    end if;
+    update public.ai_support_conversations set owner = 'ai',
+           status = case when p_resolve then 'resolved' else 'active' end,
+           resolved_at = case when p_resolve then now() else resolved_at end,
+           resolved_by = case when p_resolve then p_actor else resolved_by end, updated_at = now()
+     where id = s.conversation_id;
+  end if;
+  insert into public.messages (sid, sender, body) values (p_sid, 'sys',
+    case when p_resolve then nm || ' marked your concern as resolved. CHDS AI Support is available if you need anything else.'
+         else nm || ' returned this conversation to CHDS AI Support, which now has the full context.' end);
+  return jsonb_build_object('ok', true, 'name', s.name, 'nm', nm, 'notif', s.notif, 'request_id', s.request_id, 'conversation_id', s.conversation_id);
+end $$;
+
+-- Customer / admin closes a room (kept signature). Waiting → cancelled, otherwise closed.
+create or replace function public.end_session(p_sid text) returns jsonb language plpgsql as $$
+declare s public.sessions; h public.ai_handoff_requests; to_st text;
+begin
+  update public.sessions set status = 'ended', updated_at = now() where sid = p_sid and status <> 'ended' returning * into s;
+  if not found then return jsonb_build_object('ok', true, 'joined', '[]'::jsonb, 'notif', '[]'::jsonb, 'name', ''); end if;
+  insert into public.messages (sid, sender, body) values (p_sid, 'sys', 'Chat closed. CHDS AI Support is back to assist you.');
+  update public.agents set active_sid = null where active_sid = p_sid;
+  if s.request_id is not null then
+    select * into h from public.ai_handoff_requests where id = s.request_id for update;
+    if h.status in ('waiting','assigned','in_progress','waiting_customer') then
+      to_st := case when h.status = 'waiting' then 'cancelled' else 'closed' end;
+      update public.ai_handoff_requests set status = to_st, closed_at = now(), cancelled_at = case when to_st = 'cancelled' then now() end, updated_at = now() where id = h.id;
+      insert into public.ai_handoff_history (request_id, actor, action, from_status, to_status)
+      values (h.id, public.chds_actor('customer'), case when to_st = 'cancelled' then 'cancelled' else 'closed' end, h.status, to_st);
+    end if;
+  end if;
+  if s.conversation_id is not null then
+    update public.ai_support_conversations set owner = 'ai', status = case when status = 'handoff' then 'active' else status end, updated_at = now() where id = s.conversation_id;
+  end if;
+  return jsonb_build_object('ok', true, 'name', s.name, 'notif', s.notif, 'request_id', s.request_id,
+    'joined', (select coalesce(jsonb_agg(k), '[]'::jsonb) from jsonb_object_keys(s.joined) k));
+end $$;
+create or replace function public.close_support_session(p_sid text, p_actor text, p_reason text) returns jsonb language plpgsql as $$
+begin
+  perform set_config('chds.actor', p_actor, true);
+  perform set_config('chds.reason', coalesce(p_reason, ''), true);
+  return public.end_session(p_sid);
+end $$;
+
+-- post_message (kept signature): also reports linkage info
+create or replace function public.post_message(p_sid text, p_sender text, p_author text, p_body text) returns jsonb language plpgsql as $$
+declare s public.sessions;
+begin
+  select * into s from public.sessions where sid = p_sid;
+  if not found or s.status = 'ended' then return jsonb_build_object('ok', false); end if;
+  insert into public.messages (sid, sender, author, body) values (p_sid, p_sender, p_author, p_body);
+  update public.sessions set updated_at = now() where sid = p_sid;
+  return jsonb_build_object('ok', true, 'st', s.status, 'name', s.name, 'request_id', s.request_id,
+    'joined', (select coalesce(jsonb_agg(k), '[]'::jsonb) from jsonb_object_keys(s.joined) k));
+end $$;
+
+-- poll_session (kept signature): rooms linked to a handoff request stay in the queue (no 15-minute
+-- auto-expiry); only legacy unlinked rooms keep the old expiry.
+create or replace function public.poll_session(p_sid text, p_after bigint) returns jsonb language plpgsql as $$
+declare s public.sessions; expd jsonb;
+begin
+  update public.sessions set status = 'ended', updated_at = now()
+   where sid = p_sid and status = 'wait' and request_id is null and created_at < now() - interval '15 minutes' returning * into s;
+  if found then
+    expd := s.notif;
+    insert into public.messages(sid, sender, body) values (p_sid, 'sys', 'No agent is available right now. CHDS AI Support will keep assisting you, or message us on Telegram.');
+  end if;
+  select * into s from public.sessions where sid = p_sid;
+  if not found then return jsonb_build_object('st', 'ended', 'n', 0, 'msgs', '[]'::jsonb); end if;
+  return jsonb_build_object('st', s.status, 'n', (select count(*) from jsonb_object_keys(s.joined)), 'expired', expd,
+    'owner_uid', s.owner_uid, 'owner_name', s.owner_name, 'request_id', s.request_id,
+    'hstatus', (select status from public.ai_handoff_requests where id = s.request_id),
+    'msgs', coalesce((select jsonb_agg(jsonb_build_object('i', id, 'f', sender, 't', body, 'a', author) order by id)
+                        from public.messages where sid = p_sid and id > p_after and sender <> 'user'), '[]'::jsonb));
+end $$;
+
+-- exit_session (kept for the old bot callback): now equals "return to AI" without a summary
+create or replace function public.exit_session(p_sid text, p_uid text) returns jsonb language plpgsql as $$
+declare o jsonb;
+begin
+  o := public.return_to_ai(p_sid, 'tg:' || p_uid, p_uid, false, null, null, false);
+  if not (o->>'ok')::boolean then
+    update public.agents set active_sid = null where uid = p_uid and active_sid = p_sid;
+    return jsonb_build_object('ok', false);
+  end if;
+  return jsonb_build_object('ok', true, 'ended', true, 'nm', o->>'nm', 'left', '[]'::jsonb, 'notif', o->'notif');
+end $$;
+
+-- Report review: pending → reviewed → approved | rejected (reason required for rejection)
+create or replace function public.report_review(p_id text, p_actor text, p_action text, p_reason text, p_note text) returns jsonb language plpgsql as $$
+declare r public.reports; to_st text;
+begin
+  select * into r from public.reports where id = p_id and deleted_at is null for update;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  to_st := case p_action when 'approve' then 'approved' when 'reject' then 'rejected' when 'review' then 'reviewed' end;
+  if to_st is null then return jsonb_build_object('ok', false, 'error', 'bad_action'); end if;
+  if r.status not in ('pending','reviewed') or (to_st = 'reviewed' and r.status <> 'pending') then
+    return jsonb_build_object('ok', false, 'error', 'already_handled', 'status', r.status);
+  end if;
+  if to_st = 'rejected' and coalesce(btrim(p_reason), '') = '' then return jsonb_build_object('ok', false, 'error', 'reason_required'); end if;
+  perform set_config('chds.actor', p_actor, true);
+  perform set_config('chds.reason', coalesce(p_reason, ''), true);
+  update public.reports set status = to_st, reviewed_by = p_actor, reviewed_at = now(),
+         review_note = coalesce(nullif(btrim(p_note), ''), review_note),
+         rejection_reason = case when to_st = 'rejected' then left(btrim(p_reason), 500) end,
+         approved_at = case when to_st = 'approved' then now() else approved_at end
+   where id = p_id returning * into r;
+  return jsonb_build_object('ok', true, 'report', to_jsonb(r));
+end $$;
+
+-- Generic actor/reason wrapper for audited edits made through PostgREST
+create or replace function public.report_update(p_id text, p_actor text, p_reason text, p_patch jsonb) returns jsonb language plpgsql as $$
+declare r public.reports;
+begin
+  if coalesce(btrim(p_reason), '') = '' then return jsonb_build_object('ok', false, 'error', 'reason_required'); end if;
+  perform set_config('chds.actor', p_actor, true);
+  perform set_config('chds.reason', p_reason, true);
+  select * into r from public.reports where id = p_id and deleted_at is null for update;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if p_patch ? 'delete' then
+    update public.reports set deleted_at = now(), deleted_by = p_actor where id = p_id returning * into r;
+  else
+    update public.reports set
+      title = case when p_patch ? 'title' then p_patch->>'title' else title end,
+      description = case when p_patch ? 'description' then p_patch->>'description' else description end,
+      category = case when p_patch ? 'category' then p_patch->>'category' else category end,
+      additional_info = case when p_patch ? 'additional_info' then p_patch->>'additional_info' else additional_info end,
+      recovered = case when p_patch ? 'recovered' then (p_patch->>'recovered')::int else recovered end,
+      revenue = case when p_patch ? 'revenue' then (p_patch->>'revenue')::numeric else revenue end,
+      report_date = case when p_patch ? 'report_date' then (p_patch->>'report_date')::date else report_date end
+    where id = p_id returning * into r;
+  end if;
+  return jsonb_build_object('ok', true, 'report', to_jsonb(r));
+end $$;
+
+-- Manual revenue: create / edit / verify / reject / delete with history. p_today is the PH date.
+create or replace function public.revenue_mutate(p jsonb) returns jsonb language plpgsql as $$
+declare r public.revenue_records; op text := p->>'op'; actor text := p->>'actor'; reason text := nullif(btrim(p->>'reason'), '');
+        d date; amt numeric; today date := (p->>'today')::date; st text;
+begin
+  perform set_config('chds.actor', actor, true);
+  perform set_config('chds.reason', coalesce(reason, ''), true);
+  if op = 'create' then
+    d := (p->>'revenue_date')::date; amt := (p->>'amount')::numeric;
+    st := case when d > today then 'projected' when p->>'status' = 'projected' then 'projected' else 'pending' end;
+    begin
+      insert into public.revenue_records (id, team_member_id, member_uid, member_name, amount, revenue_date, description, status, source, dedupe_key, created_by)
+      values (p->>'id', nullif(p->>'team_member_id', '')::uuid, p->>'member_uid', p->>'member_name', amt, d, coalesce(p->>'description', ''), st, 'manual',
+              md5(concat_ws('|', coalesce(p->>'team_member_id', ''), d, amt, lower(btrim(coalesce(p->>'description', ''))))), actor)
+      returning * into r;
+    exception when unique_violation then return jsonb_build_object('ok', false, 'error', 'duplicate'); end;
+    return jsonb_build_object('ok', true, 'record', to_jsonb(r));
+  end if;
+  select * into r from public.revenue_records where id = p->>'id' and deleted_at is null for update;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if r.source = 'report' and op in ('edit','delete','verify','reject') then return jsonb_build_object('ok', false, 'error', 'report_linked'); end if;
+  if op in ('edit','reject','delete') and reason is null then return jsonb_build_object('ok', false, 'error', 'reason_required'); end if;
+  if op = 'edit' then
+    d := coalesce((p->>'revenue_date')::date, r.revenue_date); amt := coalesce((p->>'amount')::numeric, r.amount);
+    st := case when d > today then 'projected' when r.status = 'projected' then 'pending' else r.status end;
+    if r.status = 'actual' and (amt <> r.amount or d <> r.revenue_date) then st := 'pending'; end if; -- re-verification required
+    if r.status = 'rejected' then st := 'rejected'; end if;
+    update public.revenue_records set amount = amt, revenue_date = d,
+           description = coalesce(p->>'description', description),
+           team_member_id = case when p ? 'team_member_id' then nullif(p->>'team_member_id', '')::uuid else team_member_id end,
+           member_name = coalesce(p->>'member_name', member_name),
+           status = st, verified_by = case when st = 'actual' then verified_by end, verified_at = case when st = 'actual' then verified_at end,
+           dedupe_key = md5(concat_ws('|', coalesce(p->>'team_member_id', team_member_id::text, ''), d, amt, lower(btrim(coalesce(p->>'description', description))))),
+           updated_at = now()
+     where id = r.id returning * into r;
+  elsif op = 'verify' then
+    if r.status not in ('pending','projected') then return jsonb_build_object('ok', false, 'error', 'already_handled'); end if;
+    if r.revenue_date > today then return jsonb_build_object('ok', false, 'error', 'future_date'); end if;
+    update public.revenue_records set status = 'actual', verified_by = actor, verified_at = now(), updated_at = now() where id = r.id returning * into r;
+  elsif op = 'reject' then
+    if r.status = 'rejected' then return jsonb_build_object('ok', false, 'error', 'already_handled'); end if;
+    update public.revenue_records set status = 'rejected', rejection_reason = left(reason, 500), verified_by = null, verified_at = null, updated_at = now() where id = r.id returning * into r;
+  elsif op = 'delete' then
+    update public.revenue_records set deleted_at = now(), updated_at = now() where id = r.id returning * into r;
+  else
+    return jsonb_build_object('ok', false, 'error', 'bad_op');
+  end if;
+  return jsonb_build_object('ok', true, 'record', to_jsonb(r));
+exception when unique_violation then return jsonb_build_object('ok', false, 'error', 'duplicate');
+end $$;
+
+-- Staff account save with the "last active Super Admin" rule. p_env_founders = founders defined in ADMIN_UIDS.
+create or replace function public.admin_user_save(p jsonb, p_env_founders int) returns jsonb language plpgsql as $$
+declare u public.admin_users; before public.admin_users; left_founders int; existed boolean;
+begin
+  perform 1 from public.admin_users where role_id = 'founder' for update; -- serialize founder changes
+  select * into before from public.admin_users where uid = p->>'uid' for update;
+  existed := found;
+  if existed and before.source = 'env' then return jsonb_build_object('ok', false, 'error', 'env_managed'); end if;
+  if p ? 'delete' then
+    if not existed then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+    update public.admin_users set deleted_at = now(), status = 'suspended', status_reason = p->>'status_reason', updated_at = now() where uid = p->>'uid' returning * into u;
+  elsif existed then
+    update public.admin_users set
+      display_name = coalesce(p->>'display_name', display_name),
+      role_id = coalesce(p->>'role_id', role_id),
+      grants = case when p ? 'grants' then array(select jsonb_array_elements_text(p->'grants')) else grants end,
+      status = coalesce(p->>'status', status),
+      status_reason = case when p ? 'status' then p->>'status_reason' else status_reason end,
+      password_hash = coalesce(p->>'password_hash', password_hash),
+      password_changed_at = case when p ? 'password_hash' then now() else password_changed_at end,
+      team_member_id = case when p ? 'team_member_id' then nullif(p->>'team_member_id', '')::uuid else team_member_id end,
+      updated_at = now()
+    where uid = p->>'uid' returning * into u;
+  else
+    insert into public.admin_users (uid, display_name, role_id, grants, status, password_hash, password_changed_at, team_member_id, created_by)
+    values (p->>'uid', p->>'display_name', p->>'role_id', array(select jsonb_array_elements_text(coalesce(p->'grants', '[]'))),
+            coalesce(p->>'status', 'active'), p->>'password_hash', case when p ? 'password_hash' then now() end,
+            nullif(p->>'team_member_id', '')::uuid, p->>'actor')
+    returning * into u;
+  end if;
+  select count(*) into left_founders from public.admin_users where role_id = 'founder' and status = 'active' and deleted_at is null and source = 'db';
+  if p_env_founders + left_founders < 1 then
+    raise exception 'last_super_admin' using errcode = 'P0001';
+  end if;
+  return jsonb_build_object('ok', true, 'user', to_jsonb(u) - 'password_hash');
+exception when raise_exception then
+  if sqlerrm = 'last_super_admin' then return jsonb_build_object('ok', false, 'error', 'last_super_admin'); end if;
+  raise;
+end $$;
+
+-- Atomic visitor identity: profile + server-side session in one transaction
+create or replace function public.ai_identity_create(p_name text, p_token_hash text, p_ip text, p_ua text) returns jsonb language plpgsql as $$
+declare u public.ai_support_users;
+begin
+  insert into public.ai_support_users (display_name) values (p_name) returning * into u;
+  insert into public.ai_support_sessions (token_hash, user_id, ip, user_agent) values (p_token_hash, u.id, left(p_ip, 64), left(p_ua, 200));
+  return jsonb_build_object('id', u.id, 'display_name', u.display_name, 'created_at', u.created_at);
+end $$;
+
+-- AI Support visitor search for admins (counts computed from real rows)
+create or replace function public.ai_users_search(p_q text, p_status text, p_limit int, p_offset int) returns jsonb language sql stable as $$
+  with base as (
+    select u.* from public.ai_support_users u
+     where (coalesce(p_q, '') = '' or u.display_name ilike '%' || p_q || '%' or u.id::text = p_q or u.id::text like p_q || '%')
+       and (coalesce(p_status, '') = '' or u.status = p_status)
+  )
+  select jsonb_build_object(
+    'total', (select count(*) from base),
+    'rows', coalesce((select jsonb_agg(x order by x.last_seen_at desc) from (
+       select b.id, b.display_name, b.status, b.flags, b.first_seen_at, b.last_seen_at, b.created_at,
+              (select count(*) from public.ai_support_conversations c where c.user_id = b.id) as conversations,
+              (select count(*) from public.ai_support_messages m where m.user_id = b.id and m.role = 'user') as messages,
+              (select count(*) from public.ai_handoff_requests h where h.user_id = b.id) as handoffs
+         from base b order by b.last_seen_at desc limit least(greatest(p_limit, 1), 100) offset greatest(p_offset, 0)) x), '[]'::jsonb))
+$$;
+
+-- Revenue analytics (dates are Philippine calendar dates computed by the API)
+create or replace function public.revenue_analytics(p_from date, p_to date, p_group text, p_today date, p_week date, p_month date, p_year date, p_members uuid[], p_uids text[])
+returns jsonb language sql stable as $$
+  with rr as (
+    select r.*, coalesce(r.team_member_id::text, 'uid:' || coalesce(r.member_uid, '?')) as mkey
+      from public.revenue_records r
+     where r.deleted_at is null
+       and (p_members is null or r.team_member_id = any(p_members) or r.member_uid = any(coalesce(p_uids, '{}')))
+  ), inr as (select * from rr where revenue_date between p_from and p_to),
+  rep as (
+    select r.*, coalesce(r.team_member_id::text, 'uid:' || r.uid) as mkey from public.reports r
+     where r.deleted_at is null and r.report_date between p_from and p_to
+       and (p_members is null or r.team_member_id = any(p_members) or r.uid = any(coalesce(p_uids, '{}')))
+  ), members as (
+    select k as mkey,
+           coalesce((select t.display_name from public.team_members t where t.id::text = k),
+                    (select x.member_name from rr x where x.mkey = k order by x.updated_at desc limit 1),
+                    (select x.name from rep x where x.mkey = k order by x.created_at desc limit 1), k) as name,
+           (select t.status from public.team_members t where t.id::text = k) as member_status
+      from (select mkey k from inr union select mkey from rep
+            union select id::text from public.team_members where status = 'active' and deleted_at is null
+              and (p_members is null or id = any(p_members))) ks
+  ), per as (
+    select m.mkey, m.name, m.member_status,
+           coalesce((select sum(amount) from inr where inr.mkey = m.mkey and status = 'actual'), 0) as actual,
+           coalesce((select sum(amount) from inr where inr.mkey = m.mkey and status = 'pending'), 0) as pending,
+           coalesce((select sum(recovered) from rep where rep.mkey = m.mkey and status = 'approved'), 0) as recovered,
+           (select count(*) from rep where rep.mkey = m.mkey) as reports,
+           (select count(*) from rep where rep.mkey = m.mkey and status = 'approved') as approved_reports
+      from members m
+  ), tot as (select coalesce(sum(amount) filter (where status = 'actual'), 0) as actual from inr),
+  active_n as (select count(*) as n from public.team_members where status = 'active' and deleted_at is null and (p_members is null or id = any(p_members)))
+  select jsonb_build_object(
+    'range', jsonb_build_object('from', p_from, 'to', p_to, 'group', p_group),
+    'totals', jsonb_build_object(
+      'actual', (select actual from tot),
+      'pending', coalesce((select sum(amount) from inr where status = 'pending'), 0),
+      'projected', coalesce((select sum(amount) from inr where status = 'projected'), 0),
+      'rejected', coalesce((select sum(amount) from inr where status = 'rejected'), 0),
+      'records', (select count(*) from inr),
+      'recovered', coalesce((select sum(recovered) from rep where status = 'approved'), 0),
+      'reports', jsonb_build_object('total', (select count(*) from rep),
+          'pending', (select count(*) from rep where status = 'pending'), 'reviewed', (select count(*) from rep where status = 'reviewed'),
+          'approved', (select count(*) from rep where status = 'approved'), 'rejected', (select count(*) from rep where status = 'rejected')),
+      'active_members', (select n from active_n),
+      'avg_per_active_member', case when (select n from active_n) > 0 then round((select actual from tot) / (select n from active_n), 2) end),
+    'fixed', jsonb_build_object(
+      'today', coalesce((select sum(amount) from rr where status = 'actual' and revenue_date = p_today), 0),
+      'week', coalesce((select sum(amount) from rr where status = 'actual' and revenue_date between p_week and p_today), 0),
+      'month', coalesce((select sum(amount) from rr where status = 'actual' and revenue_date between p_month and p_today), 0),
+      'year', coalesce((select sum(amount) from rr where status = 'actual' and revenue_date between p_year and p_today), 0),
+      'all_time', coalesce((select sum(amount) from rr where status = 'actual'), 0)),
+    'series', coalesce((select jsonb_agg(jsonb_build_object('bucket', b, 'actual', a, 'projected', pj, 'pending', pd) order by b) from (
+        select date_trunc(case when p_group in ('day','week','month','year') then p_group else 'day' end, revenue_date::timestamp)::date as b,
+               sum(amount) filter (where status = 'actual') as a, sum(amount) filter (where status = 'projected') as pj,
+               sum(amount) filter (where status = 'pending') as pd
+          from inr group by 1) s), '[]'::jsonb),
+    'members', coalesce((select jsonb_agg(jsonb_build_object('key', mkey, 'name', name, 'status', member_status, 'actual', actual, 'pending', pending,
+                 'recovered', recovered, 'reports', reports, 'approved_reports', approved_reports,
+                 'contribution', case when (select actual from tot) > 0 then round(actual * 100 / (select actual from tot), 2) else 0 end)
+                 order by actual desc, name) from per), '[]'::jsonb)
+  )
+$$;
+
+-- Handoff / AI analytics from real rows
+create or replace function public.ai_support_analytics(p_from timestamptz, p_to timestamptz) returns jsonb language sql stable as $$
+  with c as (select * from public.ai_support_conversations where created_at >= p_from and created_at < p_to),
+       h as (select * from public.ai_handoff_requests where created_at >= p_from and created_at < p_to)
+  select jsonb_build_object(
+    'conversations', (select count(*) from c),
+    'ai_resolved', (select count(*) from c where status = 'resolved' and not exists (select 1 from public.ai_handoff_requests x where x.conversation_id = c.id)),
+    'resolved_total', (select count(*) from c where status = 'resolved'),
+    'escalations', (select count(*) from h),
+    'handoffs_accepted', (select count(*) from h where assigned_at is not null),
+    'handoffs_pending', (select count(*) from h where status = 'waiting'),
+    'handoffs_cancelled', (select count(*) from h where status = 'cancelled'),
+    'avg_ai_resolution_sec', (select round(avg(extract(epoch from resolved_at - created_at))) from c where status = 'resolved'
+                                and not exists (select 1 from public.ai_handoff_requests x where x.conversation_id = c.id)),
+    'avg_wait_sec', (select round(avg(extract(epoch from assigned_at - created_at))) from h where assigned_at is not null),
+    'avg_human_resolution_sec', (select round(avg(extract(epoch from coalesce(resolved_at, closed_at) - assigned_at))) from h where assigned_at is not null and coalesce(resolved_at, closed_at) is not null),
+    'reasons', coalesce((select jsonb_object_agg(reason, n) from (select reason, count(*) n from h group by reason) r), '{}'::jsonb),
+    'categories', coalesce((select jsonb_object_agg(coalesce(category, 'uncategorized'), n) from (select category, count(*) n from c group by category) r), '{}'::jsonb),
+    'daily', coalesce((select jsonb_agg(jsonb_build_object('d', d, 'conversations', coalesce(cn, 0), 'escalations', coalesce(en, 0)) order by d) from (
+        select coalesce(a.d, b.d) d, a.n cn, b.n en
+          from (select (created_at at time zone 'Asia/Manila')::date d, count(*) n from c group by 1) a
+          full join (select (created_at at time zone 'Asia/Manila')::date d, count(*) n from h group by 1) b on a.d = b.d) x), '[]'::jsonb)
+  )
+$$;
+
+-- ---------------------------------------------------------------------------------
+-- 12. Updated public stats (exclude soft-deleted reports; same output shape)
+-- ---------------------------------------------------------------------------------
+create or replace function public.stats_json(p_from date) returns jsonb language sql stable as $$
+  select jsonb_build_object(
+    'totals', (select jsonb_build_object('recovered', coalesce(sum(recovered),0), 'revenue', coalesce(sum(revenue),0), 'reports', count(*)) from public.reports where status='approved' and deleted_at is null),
+    'rows', coalesce((select jsonb_agg(jsonb_build_object('d', d, 'recovered', r, 'revenue', v) order by d)
+              from (select report_date as d, sum(recovered) r, sum(revenue) v from public.reports where status='approved' and deleted_at is null and report_date >= p_from group by report_date) x), '[]'::jsonb),
+    'recent', coalesce((select jsonb_agg(jsonb_build_object('n', name, 'recovered', recovered, 'revenue', revenue, 'ts', (extract(epoch from created_at)*1000)::bigint) order by created_at desc)
+              from (select * from public.reports where status='approved' and deleted_at is null order by created_at desc limit 6) y), '[]'::jsonb)
+  )
+$$;
+create or replace function public.user_totals(p_uid text) returns jsonb language sql stable as $$
+  select jsonb_build_object('recovered', coalesce(sum(recovered),0), 'revenue', coalesce(sum(revenue),0)) from public.reports where uid = p_uid and status = 'approved' and deleted_at is null
+$$;
+
+-- ---------------------------------------------------------------------------------
+-- 13. Row Level Security: ON, no policies → anon/authenticated keys can read/write nothing.
+--     Only the server (service_role) reaches the data.
+-- ---------------------------------------------------------------------------------
+do $$ declare t text; begin
+  foreach t in array array['system_settings','permissions','roles','admin_users','team_members','report_evidence','report_history',
+    'revenue_records','revenue_history','ai_support_users','ai_support_sessions','ai_support_conversations','ai_support_messages',
+    'ai_handoff_requests','ai_handoff_history','notification_log','support_rate_limits','security_events','login_guards',
+    'internal_notes','announcements','backups','app_errors','reports','sessions','messages','agents','bot_state','tg_updates',
+    'rate_limits','admin_sessions','admin_otps','audit_log']
+  loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on table public.%I from anon, authenticated', t);
+  end loop;
+end $$;
+
+-- Only the server (service_role) may execute any function in the public schema
+do $$ declare f record; begin
+  for f in select p.oid::regprocedure as sig from pg_proc p
+            where p.pronamespace = 'public'::regnamespace and p.prokind = 'f'
+              and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
+  loop
+    execute 'revoke all on function ' || f.sig || ' from public, anon, authenticated';
+    execute 'grant execute on function ' || f.sig || ' to service_role';
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------------------------------
+-- 14. Storage buckets (Supabase Storage). Team photos are public images; evidence and
+--     backups are private and only reachable through short-lived signed URLs from the API.
+-- ---------------------------------------------------------------------------------
+do $$ begin
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('team-photos', 'team-photos', true, 2097152, array['image/jpeg','image/png','image/webp'])
+  on conflict (id) do nothing;
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('report-evidence', 'report-evidence', false, 3145728, array['image/jpeg','image/png','image/webp','application/pdf'])
+  on conflict (id) do nothing;
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('backups', 'backups', false, 52428800, array['application/json','text/csv','application/gzip'])
+  on conflict (id) do nothing;
+exception
+  when undefined_column then
+    insert into storage.buckets (id, name, public) values ('team-photos', 'team-photos', true), ('report-evidence', 'report-evidence', false), ('backups', 'backups', false)
+    on conflict (id) do nothing;
+  when undefined_table then
+    raise notice 'storage schema not found: create the buckets team-photos (public), report-evidence (private) and backups (private) in Supabase -> Storage';
+end $$;
+
+notify pgrst, 'reload schema';
