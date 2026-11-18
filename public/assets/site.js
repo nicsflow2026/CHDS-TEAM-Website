@@ -2,6 +2,7 @@
 (()=>{
 "use strict";
 const {CONFIG,TEAM}=window.CHDS;
+const API=String(CONFIG.API||"").trim().replace(/\/+$/,""); // "" = same origin (Vercel). Only set it if the API lives on another domain.
 const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const RM=matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -97,8 +98,7 @@ function chart(){
 }
 async function load(){
   try{
-    if(!CONFIG.API)throw 0;
-    const r=await fetch(CONFIG.API+"/api/stats",{cache:"no-store"});if(!r.ok)throw 0;
+    const r=await fetch(API+"/api/stats",{cache:"no-store"});if(!r.ok)throw 0;
     const j=await r.json();if(!j||!j.totals||!Array.isArray(j.series)||!j.series.length)throw 0;
     DATA=j;demo=false;
   }catch{if(!DATA){DATA=demoData();demo=true}}
@@ -116,7 +116,7 @@ let sid="";try{sid=sessionStorage.getItem("chds_sid")||""}catch{}
 if(!/^[a-f0-9]{16}$/.test(sid)){sid=[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,"0")).join("");try{sessionStorage.setItem("chds_sid",sid)}catch{}}
 const flag=v=>{try{v?sessionStorage.setItem("chds_h","1"):sessionStorage.removeItem("chds_h")}catch{}};
 let mode="ai",busy=false,after=0,pollT=0,pending=[],shots=[],ocrTxt="";
-const post=(p,b)=>fetch(CONFIG.API+p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
+const post=(p,b)=>fetch(API+p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
 const HUMAN=/(real|live)\s*(human|person|agent)|human\s*(support|agent)|talk to (a |an )?(human|person|agent|someone)|speak (to|with) (a |an )?(human|person|agent|someone)|connect.*(human|agent|person)|totoong\s*tao|kausapin.*(tao|agent)/i;
 
 function setMode(m){
@@ -179,14 +179,13 @@ async function send(t){
   }
   hist.push({role:"user",content:body});
   const w=add("Typing…","bot typing");let out="CHDS AI Support is unavailable right now. Please message us on Telegram @"+CONFIG.TG+".";
-  try{if(!CONFIG.API)throw 0;const r=await post("/api/chat",{messages:hist.slice(-8)});const j=await r.json();if(!r.ok||!j.reply)throw 0;out=j.reply}catch{}
+  try{const r=await post("/api/chat",{messages:hist.slice(-8)});const j=await r.json().catch(()=>({}));if(r.status===429)out="You are sending messages too fast. Please wait a moment and try again.";else if(r.ok&&j.reply)out=j.reply}catch{}
   w.remove();add(out,"bot");hist.push({role:"assistant",content:out});busy=false;
 }
 
 /* human handoff */
 async function handoff(){
   if(busy||mode!=="ai")return;busy=true;
-  if(!CONFIG.API){sys("Human support is not connected yet. Please message us on Telegram @"+CONFIG.TG+".");busy=false;return}
   const w=add("Contacting the CHDS team…","bot typing");
   try{
     const r=await post("/api/human/request",{sid,tr:hist.slice(-10).map(m=>({r:m.role==="user"?"user":"ai",c:m.content.split("\n\n[Screenshot")[0]})),imgs:shots,ocr:ocrTxt});
@@ -197,7 +196,7 @@ async function handoff(){
 async function poll(){
   clearTimeout(pollT);if(mode==="ai")return;
   try{
-    const r=await fetch(`${CONFIG.API}/api/human/poll?sid=${sid}&after=${after}`,{cache:"no-store"});
+    const r=await fetch(`${API}/api/human/poll?sid=${sid}&after=${after}`,{cache:"no-store"});
     if(r.ok){
       const j=await r.json();
       j.msgs.forEach(m=>{after=Math.max(after,m.i);m.f==="agent"?add(m.t,"ag",null,m.a):sys(m.t)});
@@ -219,7 +218,7 @@ function greet(){
 }
 $("#cf").addEventListener("submit",e=>{e.preventDefault();const i=$("#ci"),t=i.value.trim();i.value="";send(t)});
 $("#fab").onclick=()=>setChat(!chat.classList.contains("on"));$("#cx").onclick=()=>setChat(false);$$(".open-ai").forEach(b=>b.onclick=()=>setChat(true));
-try{if(CONFIG.API&&sessionStorage.getItem("chds_h")){setMode("wait");poll()}}catch{}
+try{if(sessionStorage.getItem("chds_h")){setMode("wait");poll()}}catch{}
 
 /* polish: spotlight, stagger, active nav */
 document.addEventListener("pointermove",e=>{const c=e.target.closest&&e.target.closest(".stat,.panel,.svc,.step,.tcard");if(c){const r=c.getBoundingClientRect();c.style.setProperty("--mx",(e.clientX-r.left)+"px");c.style.setProperty("--my",(e.clientY-r.top)+"px")}},{passive:true});

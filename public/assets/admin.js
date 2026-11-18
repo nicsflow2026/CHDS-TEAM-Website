@@ -24,7 +24,7 @@ $("#s1").addEventListener("submit",async e=>{
   uid=$("#uid").value.trim();
   const r=await call("login",{uid,password:$("#pw").value});$("#pw").value="";b.disabled=false;
   if(r.ok){show("#s1",false);show("#s2",true);$("#code").focus();return}
-  err(r.status===429?"Too many attempts. Try again in 15 minutes.":r.status===503?"The admin panel is not configured yet. See the README.":r.status===502?"Could not send the code. Open the bot in Telegram, press /start, then try again.":"Something went wrong. Please try again.");
+  err(r.status===429?"Too many attempts. Try again in 15 minutes.":r.status===503?(r.j.error==="db_not_migrated"?"Database is not set up: run ALL of supabase.sql in Supabase -> SQL Editor, then try again.":"The admin panel is not configured yet. See the README."):r.status===502?"Could not send the code. Open the bot in Telegram, press /start, then try again.":"Something went wrong. Please try again.");
 });
 $("#s2").addEventListener("submit",async e=>{
   e.preventDefault();err("");const b=$("#s2 button");b.disabled=true;
