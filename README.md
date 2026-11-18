@@ -19,8 +19,14 @@ supabase.sql       database schema (run in full, safe to re-run after every upda
    -> Overview -> "Connect Telegram bot" (sets webhook + commands) and "Test AI".
 7. Edit public/assets/config.js (team names, photos, Telegram/Facebook links, currency, WhatsApp, email), push, done.
 
+## Admin panel session
+Stay signed in across page reloads: opening /admin goes straight to the dashboard while the session is valid. Auto sign-out after 10 minutes without activity (ADMIN_IDLE_MIN), 8 hours maximum.
+
+## Reports
+Reports sent by ADMIN_UIDS publish instantly. Member reports wait for admin approval (Approve button in Telegram or Admin -> Reports). Set AUTO_APPROVE=true to publish everything instantly.
+
 ## Admin panel security
-Password + one-time Telegram code (2 factors), only for UIDs in ADMIN_UIDS, 8-hour server-side sessions stored hashed,
+Password + one-time Telegram code (2 factors), only for UIDs in ADMIN_UIDS, server-side sessions (10 min idle / 8 h max) stored hashed,
 HttpOnly + Secure + SameSite=Strict cookie, CSRF header + same-origin check, rate limits, lockout after 5 wrong codes,
 audit log of every action, "Sign out everywhere". Rotate ADMIN_PASSWORD and SESSION_SECRET if you suspect a leak.
 
