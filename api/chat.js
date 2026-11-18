@@ -15,6 +15,6 @@ export default api(async (req, res) => {
   if (!m.length || m[m.length - 1].role !== "user") return res.status(400).json({ error: "bad_request" });
   const o = await aiChat([{ role: "system", content: SYSTEM }, ...m]);
   if (o.ok) return res.json({ reply: o.reply, model: o.model });
-  if (o.error === "bad_key") return res.status(502).json({ error: "bad_key" });
-  res.status(502).json({ error: "upstream" });
+  console.error("chat failed", o.error, o.detail);
+  res.status(502).json({ error: o.error === "bad_key" ? "bad_key" : "upstream" });
 });
