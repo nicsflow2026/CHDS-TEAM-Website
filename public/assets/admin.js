@@ -2,8 +2,8 @@
 (()=>{
 const $=(s,r=document)=>r.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let D=null,uid="",tab="overview",filter="all",chatSid="",chatMsgs=[],timer=0,note="";
-const money=n=>(D?D.cur:"$")+Number(n).toLocaleString("en-US",{maximumFractionDigits:2});
+let D=null,uid="",tab="overview",filter="all",chatSid="",chatMsgs=[],timer=0,note="",idleMs=600000,last=Date.now(),pingAt=0;
+const money=n=>(D?D.cur:"₱")+Number(n).toLocaleString("en-US",{maximumFractionDigits:2});
 const when=t=>t?new Date(t).toLocaleString():"";
 const show=(id,on)=>$(id).classList.toggle("hide",!on);
 const err=t=>{$("#err").textContent=t||""};
@@ -13,10 +13,21 @@ async function call(path,body){
   if(body!==undefined){o.method="POST";o.headers["Content-Type"]="application/json";o.headers["X-CHDS-Admin"]="1";o.body=JSON.stringify(body)}
   let r;try{r=await fetch("/api/admin/"+path,o)}catch{return{ok:false,status:0,j:{}}}
   let j={};try{j=await r.json()}catch{}
-  if(r.status===401&&!/^(login|otp)/.test(path))lock();
+  if(r.status===401&&!/^(login|otp)/.test(path)){const was=!!D;lock();if(was)err("Session expired after inactivity. Please sign in again.")}
   return{ok:r.ok,status:r.status,j};
 }
 function lock(){clearInterval(timer);D=null;show("#app",false);show("#login",true);show("#s1",true);show("#s2",false);err("")}
+
+/* ---------- enter dashboard / auto sign-in / idle timeout ---------- */
+async function enter(){
+  await refresh();
+  if(!D){lock();return}
+  show("#login",false);show("#app",true);last=Date.now();
+  clearInterval(timer);timer=setInterval(()=>{if(!document.hidden)refresh(true)},30000); // quiet poll: does not extend the session
+}
+const bump=()=>{last=Date.now();if(D&&Date.now()-pingAt>60000){pingAt=Date.now();call("ping")}};
+["pointerdown","keydown","touchstart","scroll"].forEach(ev=>addEventListener(ev,bump,{passive:true}));
+setInterval(async()=>{if(D&&Date.now()-last>idleMs){await call("logout",{});lock();err("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}},10000);
 
 /* ---------- sign in ---------- */
 $("#s1").addEventListener("submit",async e=>{
@@ -29,7 +40,7 @@ $("#s1").addEventListener("submit",async e=>{
 $("#s2").addEventListener("submit",async e=>{
   e.preventDefault();err("");const b=$("#s2 button");b.disabled=true;
   const r=await call("otp",{uid,code:$("#code").value.trim()});$("#code").value="";b.disabled=false;
-  if(r.ok){show("#login",false);show("#app",true);await refresh();timer=setInterval(()=>{if(!document.hidden)refresh(true)},30000);return}
+  if(r.ok){await enter();return}
   err(r.status===429?"Too many attempts. Try again in 15 minutes.":"Invalid or expired code. Start over and request a new one.");
   if(r.status!==429){show("#s2",false);show("#s1",true)}
 });
@@ -39,8 +50,8 @@ $("#outall").onclick=async()=>{if(confirm("Sign out of all admin sessions on eve
 
 /* ---------- data ---------- */
 async function refresh(quiet){
-  const r=await call("overview?status="+filter);
-  if(!r.ok)return;D=r.j;
+  const r=await call("overview?status="+filter+(quiet?"&quiet=1":""));
+  if(!r.ok)return;D=r.j;idleMs=D.idle_ms||idleMs;
   $("#pb").textContent=D.pending?"("+D.pending+")":"";
   const a=document.activeElement;
   if(quiet&&a&&$("#view").contains(a)&&/^(INPUT|SELECT|SUMMARY|TEXTAREA)$/.test(a.tagName))return; // do not wipe what the admin is typing
@@ -116,5 +127,6 @@ $("#view").addEventListener("click",async e=>{
   else if(a==="webhook"){const r=await act({type:"webhook"});note=r.j.ok?"Telegram bot connected (webhook, commands and name set).":"Could not connect: "+(r.j.error||"check BOT_TOKEN and WEBHOOK_SECRET");render()}
   else if(a==="testai"){const r=await call("act",{type:"test_ai"});note=(r.j.ok?"✅ ":"❌ ")+(r.j.detail||"No response.");render()}
 });
-document.addEventListener("visibilitychange",()=>{if(!document.hidden&&D)refresh(true)});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&D){if(Date.now()-last>idleMs){call("logout",{});lock();err("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}else refresh(true)}});
+show("#login",false);enter(); // already signed in (valid session cookie)? go straight to the dashboard
 })();

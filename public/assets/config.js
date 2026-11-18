@@ -3,7 +3,7 @@ window.CHDS=(()=>{
 /* ============ CONFIGURE HERE ============ */
 const CONFIG={
   API:"",            // leave EMPTY on Vercel (same domain). Only fill if your API runs on another domain, e.g. "https://api.example.com" (no trailing slash)
-  CUR:"$",           // currency symbol shown on revenue
+  CUR:"₱",           // currency symbol shown on revenue (Philippine peso)
   TG:"chproofs",     // Telegram username (no @)
   WA:"",             // WhatsApp number with country code, digits only (optional)
   EMAIL:"hello@chdigitalservices.example",

@@ -179,7 +179,7 @@ async function send(t){
   }
   hist.push({role:"user",content:body});
   const w=add("Typing…","bot typing");let out="CHDS AI Support is unavailable right now. Please message us on Telegram @"+CONFIG.TG+".";
-  try{const r=await post("/api/chat",{messages:hist.slice(-8)});const j=await r.json().catch(()=>({}));if(r.status===429)out="You are sending messages too fast. Please wait a moment and try again.";else if(r.ok&&j.reply)out=j.reply}catch{}
+  try{const r=await post("/api/chat",{messages:hist.slice(-8)});const j=await r.json().catch(()=>({}));if(r.status===429)out="You are sending messages too fast. Please wait a moment and try again.";else if(r.ok&&j.reply)out=j.reply;else out+=" [ai:"+(j.error||r.status)+"]"}catch{out+=" [ai:network]"}
   w.remove();add(out,"bot");hist.push({role:"assistant",content:out});busy=false;
 }
 
