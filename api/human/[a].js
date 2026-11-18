@@ -1,59 +1,56 @@
-import { api, E, rpc, sb, say, photos, toBlob, closeNotifs, team, esc, SID, limited, jsonBody } from "../../lib/core.js";
+// Human Support room transport for the visitor (poll / send / end). Every call requires the visitor identity
+// cookie and the room must belong to that visitor. /api/human/request is kept as an alias of /api/ai/handoff.
+import { api, rpc, say, photos, toBlob, esc, SID, limited, jsonBody, sameOrigin, closeNotifs, sb, q, settings } from "../../lib/core.js";
+import { requireVisitor, createHandoff } from "../../lib/support.js";
+import { agentProfile } from "../../lib/handoff.js";
+import { closeHumanRoom } from "../../lib/rooms.js";
+
+async function ownRoom(v, sid) {
+  if (!SID.test(sid)) return null;
+  return (await sb(`/sessions?sid=eq.${q(sid)}&ai_user_id=eq.${q(v.user.id)}&select=sid,status,owner_uid,owner_name,request_id,conversation_id`))[0] || null;
+}
+
 export default api(async (req, res) => {
   const a = String(req.query.a || ""), no = s => res.status(s).json({ error: s === 404 ? "not_found" : "bad_request" });
   res.setHeader("Cache-Control", "no-store");
+  if (req.method === "POST" && !sameOrigin(req, "x-chds-client")) return res.status(403).json({ error: "forbidden" });
+  if (a === "request" && req.method === "POST") return createHandoff(req, res, jsonBody(req)); // legacy route, same rules
+
+  const v = await requireVisitor(req, res); if (!v) return;
   if (a === "poll" && req.method === "GET") {
-    const sid = String(req.query.sid || ""); if (!SID.test(sid)) return no(400);
+    if (await limited(req, "hpoll", 90, 60)) return res.status(429).json({ error: "rate_limited" });
+    const sid = String(req.query.sid || ""), room = await ownRoom(v, sid);
+    if (!room) return no(404);
     const o = await rpc("poll_session", { p_sid: sid, p_after: Math.max(0, parseInt(req.query.after) || 0) });
     if (o.expired && o.expired.length) await closeNotifs(o.expired, "⏹ <b>Request expired</b> — no one joined in time.");
-    return res.json({ st: o.st, n: o.n, msgs: o.msgs });
+    return res.json({ st: o.st, n: o.n, msgs: o.msgs, request_id: o.request_id, status: o.hstatus,
+      agent: o.st === "live" && o.owner_uid ? await agentProfile(o.owner_uid, o.owner_name) : null });
   }
   if (req.method !== "POST") return no(404);
   const b = jsonBody(req), sid = String(b.sid || "");
-  if (!SID.test(sid)) return no(400);
   if (await limited(req, "human", 40, 60)) return res.status(429).json({ error: "rate_limited" });
-
-  if (a === "request") {
-    if (!E.BOT_TOKEN) return res.status(503).json({ error: "not_configured" });
-    if (await limited(req, "hreq", 3, 600)) return res.status(429).json({ error: "rate_limited" }); // stops alert spam to the team
-    const members = team(); if (!members.length) return res.status(503).json({ error: "no_team" });
-    const name = "Guest " + (parseInt(sid.slice(0, 4), 16) % 9000 + 1000);
-    const op = await rpc("open_session", { p_sid: sid, p_name: name });
-    if (op.existing) return res.json({ ok: true, existing: true });
-    const rows = (Array.isArray(b.tr) ? b.tr : []).slice(-10), ocr = String(b.ocr || "").slice(0, 300), blobs = (Array.isArray(b.imgs) ? b.imgs : []).slice(-3).map(toBlob).filter(Boolean);
-    const build = n => `🆘 <b>Live support request</b>\nCustomer: <b>${name}</b> · <code>#${sid}</code>\n\n<b>Conversation</b>\n${esc(rows.map(x => `${x && x.r === "user" ? "👤" : "🤖"} ${String((x && x.c) || "").slice(0, n)}`).join("\n") || "(no messages yet)")}${ocr ? `\n\n📄 <b>Screenshot text (OCR)</b>\n${esc(ocr)}` : ""}\n\n📷 Screenshots: ${blobs.length}\n<i>Tap Accept to join this chat.</i>`;
-    let text = build(160); if (text.length > 3800) text = build(50); // never cut inside an HTML entity
-    const kb = { inline_keyboard: [[{ text: "✅ Accept & join chat", callback_data: "ha:" + sid }]] };
-    let fids = null; const notif = [];
-    const send = async c => {
-      if (blobs.length) { const f = await photos(c, fids ? fids.map(x => ({ f: x })) : blobs.map(x => ({ b: x }))); if (!f) return false; fids = fids || f; }
-      const j = await say(c, text, { reply_markup: kb });
-      if (!j.ok) return false; notif.push([c, j.result.message_id]); return true;
-    };
-    let i = 0; for (; i < members.length; i++) if (await send(members[i])) { i++; break; }
-    await Promise.allSettled(members.slice(i).map(send));
-    if (!notif.length) { await rpc("end_session", { p_sid: sid }); return res.status(503).json({ error: "unreachable" }); }
-    await sb(`/sessions?sid=eq.${sid}`, { method: "PATCH", body: { notif }, prefer: "return=minimal" });
-    return res.json({ ok: true });
-  }
+  const room = await ownRoom(v, sid);
+  if (!room) return no(404);
 
   if (a === "send") {
-    const t = String(b.text || "").trim().slice(0, 1000), blob = b.img ? toBlob(b.img) : null;
+    if ((await settings()).emergency.maintenance_mode) return res.status(503).json({ error: "maintenance" });
+    const t = String(b.text || "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").trim().slice(0, 1000), blob = b.img ? toBlob(b.img) : null;
     if (!t && !blob) return no(400);
     const o = await rpc("post_message", { p_sid: sid, p_sender: "user", p_author: null, p_body: t || "[screenshot]" });
     if (!o.ok) return res.json({ st: "ended" });
-    await Promise.allSettled(o.joined.map(async uid => {
-      const cap = `💬 <b>${esc(o.name)}</b> <code>#${sid}</code>${t ? "\n" + esc(t) : ""}`;
-      if (blob) await photos(uid, [{ b: blob }], cap); else await say(uid, cap);
+    const failed = [];
+    await Promise.all(o.joined.map(async uid => {
+      const cap = `💬 <b>${esc(o.name)}</b> ${o.request_id ? `<code>${esc(o.request_id)}</code> ` : ""}<code>#${sid}</code>${t ? "\n" + esc(t) : ""}`;
+      const ok = blob ? !!(await photos(uid, [{ b: blob }], cap)) : !!(await say(uid, cap)).ok;
+      if (!ok) failed.push(uid);
     }));
-    return res.json({ ok: true, st: o.st });
+    if (failed.length) console.error("relay to agent failed", sid, failed.length); // message is stored and visible in the dashboard
+    return res.json({ ok: true, st: o.st, delivered: o.joined.length - failed.length });
   }
 
   if (a === "end") {
-    const o = await rpc("end_session", { p_sid: sid });
-    await Promise.allSettled((o.joined || []).map(uid => say(uid, `⏹ <b>${esc(o.name)}</b> closed the chat <code>#${sid}</code>.`)));
-    if (o.notif && o.notif.length) await closeNotifs(o.notif, "⏹ <b>Session closed</b> by the customer.");
+    await closeHumanRoom(sid, "visitor:" + v.user.id, room.status === "wait" ? "customer_cancelled" : "customer_closed");
     return res.json({ ok: true });
   }
   return no(404);
-});
+}, { name: "api/human" });
