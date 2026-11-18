@@ -1,6 +1,7 @@
 # CHDS Site — Vercel + Supabase
 
-Pages: / (home + live results) · /services · /team · /faq · /contact · /help (Get help) · /admin (secured panel)
+Pages: / (home + live results) · /services · /team · /faq (searchable) · /contact · /help (Get help) · /admin (secured panel) · 404 page
+All pages are plain static HTML in public/. Team names, links, currency, WhatsApp and email come from public/assets/config.js (replace the placeholder "Admin 1", "Member 1" entries with real names).
 
 ## Structure
 public/            website (pages + assets/). Edit TEAM and CONFIG in public/assets/config.js
@@ -21,6 +22,9 @@ supabase.sql       database schema (run in full, safe to re-run after every upda
 
 ## Admin panel session
 Stay signed in across page reloads: opening /admin goes straight to the dashboard while the session is valid. Auto sign-out after 10 minutes without activity (ADMIN_IDLE_MIN), 8 hours maximum.
+
+## Website content
+Edit the text of each page directly in public/*.html (index, services, team, faq, contact). The team list lives in public/assets/config.js. After editing CSS/JS, bump the ?v= number in the HTML files so visitors get the new version.
 
 ## Reports
 Reports sent by ADMIN_UIDS publish instantly. Member reports wait for admin approval (Approve button in Telegram or Admin -> Reports). Set AUTO_APPROVE=true to publish everything instantly.
