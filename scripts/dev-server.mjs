@@ -11,7 +11,7 @@ if (FAKE) await (await import("../tests/support/fixtures.mjs")).install();
 const vercel = JSON.parse(await readFile("vercel.json", "utf8"));
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png", ".webp": "image/webp", ".txt": "text/plain", ".svg": "image/svg+xml", ".json": "application/json" };
 const H = {
-  ai: "../api/ai/[a].js", human: "../api/human/[a].js", admin: "../api/admin/[a].js", public: "../api/public/[a].js",
+  ai: "../api/ai/[a].js", human: "../api/human/[a].js", admin: "../api/admin/[a].js", public: "../api/public/[a].js", portal: "../api/portal/[a].js",
   chat: "../api/chat.js", stats: "../api/stats.js", health: "../api/health.js", setup: "../api/setup.js", telegram: "../api/telegram.js"
 };
 const cache = {};
@@ -24,9 +24,12 @@ function headersFor(path) {
 createServer(async (req, res) => {
   const u = new URL(req.url, "http://localhost"), path = decodeURIComponent(u.pathname);
   for (const [k, v] of Object.entries(headersFor(path))) res.setHeader(k, v);
-  if (FAKE && path === "/__test/last-otp") { // TEST DOUBLE ONLY: read the code the fake Telegram "sent"
-    const m = [...globalThis.__fake.tg.sent].reverse().find(x => x.chat_id === u.searchParams.get("uid") && /Your code: <code>(\d{6})/.test(x.text));
+  if (FAKE && path === "/__test/last-otp") { // TEST DOUBLE ONLY: read the code the fake Telegram "sent" (admin or portal sign-in)
+    const m = [...globalThis.__fake.tg.sent].reverse().find(x => x.chat_id === u.searchParams.get("uid") && /(Your code|sign-in code): <code>(\d{6})/.test(x.text));
     res.setHeader("content-type", "application/json"); return res.end(JSON.stringify({ code: m ? /<code>(\d{6})/.exec(m.text)[1] : null }));
+  }
+  if (FAKE && path === "/__test/reset-quota") { // TEST DOUBLE ONLY: clear Human Support request quotas between UI scenarios
+    globalThis.__fake.T.support_rate_limits = []; res.setHeader("content-type", "application/json"); return res.end('{"ok":true}');
   }
   if (path.startsWith("/api/")) {
     const seg = path.split("/").filter(Boolean), key = seg[1];
