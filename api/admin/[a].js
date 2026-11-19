@@ -9,8 +9,9 @@ import { ops as people } from "../../lib/admin/people.js";
 import { ops as support } from "../../lib/admin/support.js";
 import { ops as business } from "../../lib/admin/business.js";
 import { ops as system } from "../../lib/admin/system.js";
+import { ops as v5 } from "../../lib/admin/v5.js";
 
-export const OPS = { ...people, ...support, ...business, ...system };
+export const OPS = { ...people, ...support, ...business, ...system, ...v5 };
 
 const handler = async (req, res) => {
   res.setHeader("Cache-Control", "no-store"); res.setHeader("X-Robots-Tag", "noindex");
@@ -49,7 +50,7 @@ const handler = async (req, res) => {
     if (post && (await hit("adm-w:" + ses.uid, 120, 60))) return fail(429, "rate_limited");
     if (op.reauth && !ses.reauthOk) return fail(428, "reauth_required", "Confirm your password to continue.");
     const ctx = { req, res, b, qy: req.query || {}, ses, p: ses.p, idle: IDLE(),
-      audit: (action, detail = {}, extra = {}) => audit("admin:" + ses.uid, action, detail, { ...extra, req }) };
+      audit: (action, detail = {}, extra = {}) => audit("admin:" + ses.uid, action, detail, { role: ses.p.role, ...extra, req }) };
     const out = await op.fn(ctx);
     if (op.raw || res.headersSent) return;
     return res.json(out ?? { ok: true });
