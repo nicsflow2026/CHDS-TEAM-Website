@@ -7,7 +7,7 @@
   },
   "scripts": {
     "check": "node --no-warnings scripts/check.mjs",
-    "test": "node --test tests/unit.test.mjs tests/api.test.mjs tests/admin.test.mjs",
+    "test": "node --test tests/unit.test.mjs tests/api.test.mjs tests/admin.test.mjs tests/v5.test.mjs",
     "check:env": "node scripts/check-env.mjs",
     "test:visual": "node scripts/dev-server.mjs --fake & sleep 2 && python3 tests/visual/run_visual.py; kill %1",
     "dev": "node scripts/dev-server.mjs",

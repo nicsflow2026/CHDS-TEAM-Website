@@ -17,6 +17,9 @@
     },
     "api/admin/*.js": {
       "maxDuration": 60
+    },
+    "api/portal/*.js": {
+      "maxDuration": 30
     }
   },
   "headers": [
@@ -67,6 +70,23 @@
         {
           "key": "Cache-Control",
           "value": "no-store"
+        }
+      ]
+    },
+    {
+      "source": "/report-portal",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow, noarchive"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
         }
       ]
     },
