@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Live reports | CH Digital Services</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Verified, published reports of work completed by the CHDS team.">
+<meta name="theme-color" content="#080D18">
+<meta name="color-scheme" content="dark">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CH Digital Services">
+<meta property="og:title" content="Live reports | CH Digital Services">
+<meta property="og:description" content="Verified, published reports of work completed by the CHDS team.">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="/assets/logo-h.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/site.css?v=9">
+<noscript><style>.reveal{opacity:1;transform:none}</style></noscript>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div id="pg"></div>
+<header id="hd"><div class="container bar">
+  <a class="brand" href="/"><img src="/assets/logo-h.png" alt="" width="34" height="34"><span>CH Digital Services</span></a>
+  <nav id="nav" aria-label="Main"><a href="/">Home</a><a href="/services">Services</a><a href="/team">Team</a><a href="/reports">Reports</a><a href="/faq">FAQ</a><a href="/contact">Contact</a><a class="navcta" href="/help">Get help</a></nav>
+  <a class="btn sm" href="/help">Get help</a>
+  <button id="burger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="nav"></button>
+</div></header>
+<main id="main">
+<section class="phead"><div class="container reveal"><div class="eyebrow">Live reports</div><h1 style="font-size:clamp(28px,4.6vw,44px)">Verified CHDS reports</h1><p class="lead">Recent work our team has completed and verified. Only reports approved and published by a CHDS administrator appear here — private details, customer information and evidence are never shown.</p></div></section>
+<section style="padding-top:8px"><div class="container">
+  <form class="fbar" id="ff" role="search" aria-label="Filter reports">
+    <div class="wide"><label for="fq2">Search</label><input id="fq2" name="q" type="search" maxlength="60" placeholder="Search titles and summaries" autocomplete="off"></div>
+    <div><label for="fc">Category</label><select id="fc" name="category"><option value="">All categories</option></select></div>
+    <div><label for="ffrom">Activity from</label><input id="ffrom" name="from" type="date" min="2020-01-01"></div>
+    <div><label for="fto">Activity to</label><input id="fto" name="to" type="date" min="2020-01-01"></div>
+  </form>
+  <div class="livebar"><span class="live" id="lv" role="status"><i aria-hidden="true"></i><span id="lvt">Connecting…</span></span><span id="cnt" aria-live="polite"></span></div>
+  <div id="feed" aria-live="polite" aria-busy="true"><div class="rgrid"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div></div>
+  <div class="more-row"><button class="btn ghost" type="button" id="more" hidden>Load more</button></div>
+  <p class="note" style="margin-top:22px">Activity date = when the work happened (Philippine time). Published = when it was verified and released on this page.</p>
+</div></section>
+</main>
+<footer><div class="container">
+  <div class="fgrid">
+    <div><div class="fbrand"><img src="/assets/logo-h.png" alt="" width="30" height="30">CH Digital Services</div><p>Account recovery for legitimate owners and custom websites, with AI support any time and real people behind every case.</p><button class="btn ghost sm open-ai" type="button"><i data-icon="message-square"></i> Chat with CHDS AI Support</button></div>
+    <div><h4>Services</h4><a href="/services#facebook">Facebook accounts &amp; Pages</a><a href="/services#instagram">Instagram</a><a href="/services#websites">Custom websites</a><a href="/services#process">How we work</a></div>
+    <div><h4>Company</h4><a href="/team">Team</a><a href="/reports">Live reports</a><a href="/faq">FAQ</a><a href="/contact">Contact</a></div>
+    <div><h4>Support</h4><a href="/help">Get help</a><a href="/contact">Telegram &amp; email</a><a href="/faq">Common questions</a></div>
+  </div>
+  <p class="disc">CH Digital Services is an independent service. We are not affiliated with, endorsed by or sponsored by Meta, Facebook or Instagram. We only assist the rightful owner of an account or page and cannot guarantee any outcome.</p>
+  <p class="copy">© 2024–<span id="yr">2026</span> CH Digital Services. All rights reserved.</p>
+</div></footer>
+<script src="/assets/config.js?v=8"></script>
+<script src="/assets/icons.js?v=9"></script>
+<script src="/assets/site.js?v=9"></script>
+<script src="/assets/reports.js?v=9"></script>
+</body>
+</html>

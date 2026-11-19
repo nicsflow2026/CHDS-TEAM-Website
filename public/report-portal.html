@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Report portal | CHDS team</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#080D18">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="/assets/logo-h.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/site.css?v=9">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="pwrap">
+<header class="phd"><div class="container" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+  <a class="brand" href="/"><img src="/assets/logo-h.png" alt="" width="34" height="34"><span>CHDS Report Portal</span></a>
+  <span class="chip mu"><i data-icon="lock"></i> Team only</span>
+  <button class="btn ghost sm" type="button" id="lo" hidden>Sign out</button>
+</div></header>
+<main id="main" class="container" tabindex="-1" style="flex:1;padding-bottom:40px">
+  <section id="auth" class="panel pcard" hidden aria-labelledby="auth-t">
+    <h1 id="auth-t" style="font-size:24px;margin:0 0 6px">Team sign-in</h1>
+    <p class="note" style="margin:0 0 18px">For authorized CHDS team members only. The CHDS Telegram bot sends a one-time code to your Telegram account. Never share that code — CHDS staff will never ask for it.</p>
+    <form id="ps1" class="pform" novalidate>
+      <div><label for="puid">Telegram user ID</label><input id="puid" inputmode="numeric" maxlength="20" autocomplete="username" required aria-describedby="puid-h"><div class="hint" id="puid-h">Numbers only. Open the CHDS bot and press /start first.</div></div>
+      <button class="btn" type="submit">Send me a code</button>
+    </form>
+    <form id="ps2" class="pform" novalidate hidden>
+      <p class="note" id="ps2-msg" role="status" style="margin:0"></p>
+      <div><label for="pcode">6-digit code</label><input id="pcode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></div>
+      <button class="btn" type="submit">Sign in</button>
+      <button class="btn ghost" type="button" id="pback">Start over</button>
+    </form>
+    <div class="ferr" id="perr" role="alert" style="margin-top:12px"></div>
+  </section>
+  <section id="app" hidden>
+    <div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:22px">
+      <div><h1 style="font-size:clamp(24px,4vw,34px);margin:0">Reports</h1><p class="note" id="who" style="margin:4px 0 0"></p></div>
+      <p class="note" id="sess" style="margin:0"></p>
+    </div>
+    <div class="ptabs" role="tablist" aria-label="Report portal sections">
+      <button type="button" role="tab" id="t-new" aria-controls="tab-new" aria-selected="true">New report</button>
+      <button type="button" role="tab" id="t-mine" aria-controls="tab-mine" aria-selected="false">My reports</button>
+    </div>
+    <div id="tab-new" role="tabpanel" aria-labelledby="t-new"></div>
+    <div id="tab-mine" role="tabpanel" aria-labelledby="t-mine" hidden></div>
+  </section>
+</main>
+</div>
+<script src="/assets/icons.js?v=9"></script>
+<script src="/assets/portal.js?v=9"></script>
+</body>
+</html>
