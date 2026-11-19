@@ -10,14 +10,16 @@ const moneyS=n=>n===null||n===undefined?"—":"₱"+Number(n).toLocaleString("en
 const num=n=>n===null||n===undefined?"—":Number(n).toLocaleString("en-PH");
 const when=t=>t?new Date(t).toLocaleString("en-PH",{timeZone:"Asia/Manila",year:"numeric",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):"—";
 const day=t=>t?new Date(String(t).length===10?t+"T00:00:00+08:00":t).toLocaleDateString("en-PH",{timeZone:"Asia/Manila",year:"numeric",month:"short",day:"numeric"}):"—";
-const dur=s=>s===null||s===undefined?"—":s<60?Math.round(s)+"s":s<3600?Math.round(s/60)+" min":s<86400?(s/3600).toFixed(1)+" h":(s/86400).toFixed(1)+" d";
+const dur=s=>s===null||s===undefined||!Number.isFinite(+s)?"—":s<0?"—":s<60?Math.round(s)+"s":s<3600?Math.round(s/60)+" min":s<86400?(s/3600).toFixed(1)+" h":(s/86400).toFixed(1)+" d";
 const ago=t=>{if(!t)return"—";const s=(Date.now()-Date.parse(t))/1e3;return s<60?"just now":s<3600?Math.floor(s/60)+"m ago":s<86400?Math.floor(s/3600)+"h ago":Math.floor(s/86400)+"d ago"};
 const ini=s=>String(s||"?").split(/\s+/).map(w=>w[0]||"").join("").slice(0,2).toUpperCase();
 const phToday=()=>new Date(Date.now()+8*36e5).toISOString().slice(0,10);
 const BD={active:"ok",approved:"ok",actual:"ok",resolved:"ok",verified:"ok",published:"ok",sent:"ok",live:"ok",completed:"ok",
   pending:"wa",reviewed:"in",projected:"in",waiting:"wa",awaiting_confirmation:"wa",assigned:"in",in_progress:"in",waiting_customer:"wa",handoff:"wa",draft:"",wait:"wa",running:"in",
-  rejected:"no",suspended:"wa",banned:"no",blocked:"no",cancelled:"no",failed:"no",closed:"",ended:"",archived:"",inactive:"wa",removed:"no"};
-const LABEL={waiting:"Waiting for Agent",assigned:"Assigned",in_progress:"In Progress",waiting_customer:"Waiting for Customer",awaiting_confirmation:"Awaiting confirmation",handoff:"With human"};
+  rejected:"no",suspended:"wa",banned:"no",blocked:"no",cancelled:"no",failed:"no",closed:"no",ended:"",archived:"",inactive:"wa",removed:"no",
+  changes_requested:"wa",unpublished:"",urgent:"no",high:"wa",normal:"",low:"",unread:"in"};
+const LABEL={waiting:"Waiting for Agent",assigned:"Assigned",in_progress:"In Progress",waiting_customer:"Waiting for Customer",awaiting_confirmation:"Awaiting confirmation",handoff:"With human",
+  ended:"Ended (back to AI)",closed:"Closed · locked",changes_requested:"Corrections requested"};
 const badge=s=>`<span class="bd ${BD[s]??""}">${h(LABEL[s]||String(s||"—").replace(/_/g," "))}</span>`;
 
 let ME=null,route="",timers=[],globalTimers=[],idleMs=600000,last=Date.now(),pingAt=0,badgeN=0,lastWaiting=null;
@@ -50,7 +52,8 @@ function kpis(list){return`<div class="kpis">${list.filter(Boolean).map(k=>`<div
 // cols: [{l:label, f:row=>html, c:"num"|"wide"}]
 function table(cols,rows,{click,emptyText="No records match these filters."}={}){
   if(!rows||!rows.length)return`<div class="tw">${empty(emptyText)}</div>`;
-  return`<div class="tw"><table class="rt"><thead><tr>${cols.map(c=>`<th class="${c.c||""}" scope="col">${h(c.l)}</th>`).join("")}</tr></thead><tbody>${rows.map((r,i)=>`<tr${click?` class="click" data-row="${i}" tabindex="0"`:""}>${cols.map(c=>`<td class="${c.c||""}" data-label="${h(c.l)}">${c.f(r)??""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  // data-row is ALWAYS set: row-action buttons (Edit/Delete/Revoke/Publish…) resolve their record through it, also in lists without row click.
+  return`<div class="tw"><table class="rt"><thead><tr>${cols.map(c=>`<th class="${c.c||""}" scope="col">${h(c.l)}</th>`).join("")}</tr></thead><tbody>${rows.map((r,i)=>`<tr data-row="${i}"${click?` class="click" tabindex="0"`:""}>${cols.map(c=>`<td class="${c.c||""}" data-label="${h(c.l)}">${c.f(r)??""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 function pager(total,offset,limit){if(total<=limit&&!offset)return"";const a=offset+1,b=Math.min(total,offset+limit);
   return`<div class="pager"><span>${num(a)}–${num(b)} of ${num(total)}</span><button class="btn ghost sm" type="button" data-pg="${Math.max(0,offset-limit)}" ${offset?"":"disabled"} aria-label="Previous page">${I("chevron-left")}</button><button class="btn ghost sm" type="button" data-pg="${offset+limit}" ${b<total?"":"disabled"} aria-label="Next page">${I("chevron-right")}</button></div>`}
@@ -154,8 +157,8 @@ function chart({labels,series,type="bar",fmt=num,height=240,title="Chart"}){
 const NAV=[
   ["", [["overview","Overview","layout-dashboard",null]]],
   ["People",[["users","User Management","users","manage_users"],["team","Team Management","user-plus","manage_team"],["roles","Roles & Permissions","key-round","manage_roles"],["sessions","Session Manager","monitor-smartphone","manage_security"]]],
-  ["AI Support",[["ai-users","AI Support Users","user","view_ai_conversations"],["ai-conversations","AI Conversations","message-square","view_ai_conversations"],["ai-analytics","AI Resolution Analytics","pie-chart","view_ai_conversations"],["handoffs","Human Handoff Queue","arrow-left-right",["manage_support","view_ai_conversations"]],["escalations","Escalation History","history",["manage_support","view_ai_conversations"]]]],
-  ["Operations",[["support","Human Support","headset","manage_support"],["reports","Reports","file-text",["manage_reports","approve_reports"]],["revenue","Revenue","wallet","view_revenue"],["analytics","Revenue Analytics","bar-chart","view_revenue"],["performance","Live Team Performance","activity","view_revenue"],["announcements","Announcements","megaphone","manage_announcements"]]],
+  ["AI Support",[["ai-users","AI Support Users","user","view_ai_conversations"],["ai-conversations","AI Conversations","message-square","view_ai_conversations"],["ai-analytics","AI Resolution Analytics","pie-chart","view_ai_conversations"],["knowledge","AI Knowledge Base","book-open","manage_knowledge_base"],["handoffs","Human Handoff Queue","arrow-left-right",["manage_support","view_ai_conversations"]],["escalations","Escalation History","history",["manage_support","view_ai_conversations"]]]],
+  ["Operations",[["support","Human Support","headset","manage_support"],["closed-cases","Closed Cases","lock","view_closed_cases"],["reports","Reports","file-text",["manage_reports","approve_reports"]],["revenue","Revenue","wallet","view_revenue"],["analytics","Revenue Analytics","bar-chart","view_revenue"],["performance","Live Team Performance","activity","view_revenue"],["announcements","Announcements","megaphone","manage_announcements"],["ops-analytics","Operations Analytics","activity",["manage_reports","approve_reports","manage_support","view_ai_conversations"]]]],
   ["Security & System",[["security","Security Center","shield","manage_security"],["audit","Audit Logs","scroll-text","view_audit_logs"],["emergency","Emergency Control","siren","manage_system"],["backups","Backup & Recovery","archive","manage_backups"],["health","System Health","heart-pulse","view_system_health"],["settings","System Settings","sliders","manage_settings"]]]
 ];
 const can=p=>p===null||(Array.isArray(p)?p.some(x=>ME.perms.includes(x)):ME.perms.includes(p));
@@ -166,6 +169,7 @@ function crumbs(extra){const t=titleOf(route)||{label:route};$("#crumbs").innerH
 function every(fn,ms){const id=setInterval(()=>{if(!document.hidden)fn()},ms);timers.push(id);return id}
 async function go(){
   timers.forEach(clearInterval);timers=[];
+  document.querySelectorAll("dialog[open]").forEach(d=>d.close()); // a page change (link, Back button, notification link) never leaves a dialog of the old page on top
   const [id,...rest]=(location.hash.replace(/^#\/?/,"")||"overview").split("/");
   const t=titleOf(id);route=t&&can(t.perm)?id:"overview";
   $$("#snav a").forEach(a=>{const on=a.dataset.nav===route;a.classList.toggle("on",on);on?a.setAttribute("aria-current","page"):a.removeAttribute("aria-current")});
@@ -186,7 +190,8 @@ const setTitle=()=>{document.title=(badgeN?`(${badgeN}) `:"")+(titleOf(route)?.l
 async function badges(){
   const r=await api("badges?quiet=1");if(!r.ok)return;const b=r.j;
   $$("[data-cnt]").forEach(el=>{const v=b[el.dataset.cnt]||0;el.hidden=!v;el.textContent=v>99?"99+":String(v);el.setAttribute("aria-label",v+" pending")});
-  const bell=$("#bell");bell.dataset.count=String(b.announcements||0);bell.setAttribute("aria-label",b.announcements?`Announcements (${b.announcements})`:"Announcements");
+  const bell=$("#bell"),nb=(b.notifications||0);bell.dataset.count=String(nb);bell.setAttribute("aria-label",nb?`Notifications (${nb} unread)`:"Notifications and announcements");
+  const sup=$('[data-cnt="support"]');if(sup&&b.my_cases){sup.hidden=false;sup.textContent=String(b.my_cases);sup.setAttribute("aria-label",b.my_cases+" of your open cases")}
   if(lastWaiting!==null&&(b.handoffs||0)>lastWaiting)toast(`New Human Support request waiting (${b.handoffs} in queue).`,"info");
   lastWaiting=b.handoffs===undefined?null:b.handoffs;badgeN=(b.handoffs||0)+(b.reports||0);setTitle();
 }
@@ -217,8 +222,21 @@ $("#mebtn").onclick=e=>{e.stopPropagation();const m=$("#memenu");m.hidden=!m.hid
 document.addEventListener("click",()=>{$("#memenu").hidden=true;$("#mebtn").setAttribute("aria-expanded","false")});
 $("#sopen").innerHTML=I("menu");$("#sclose").innerHTML=I("x");$("#bell").innerHTML=I("bell");$("#site").innerHTML=I("external-link");
 $("#sopen").onclick=openSide;$("#sclose").onclick=closeSide;$("#scrim").onclick=closeSide;
-$("#bell").onclick=async()=>{const r=await api("my_announcements");if(!r.ok){toast(errText(r),"err");return}
-  dlg(`<div class="db"><div class="dh"><h2>Announcements</h2><button class="ibtn" type="button" data-c aria-label="Close">${I("x")}</button></div>${r.j.rows.length?r.j.rows.map(a=>`<div class="card"><h3>${badge(a.priority)} ${h(a.title)}</h3><p style="white-space:pre-wrap;margin:0">${h(a.message)}</p><p class="small">${when(a.publish_at)}</p></div>`).join(""):empty("No announcements for you right now.","bell")}</div>`,{label:"Announcements"});$("[data-c]").onclick=e=>e.target.closest("dialog").close()};
+// Notification center: own notifications (unread first, mark read) + current announcements.
+$("#bell").onclick=async()=>{
+  const [n,a]=await Promise.all([api("notif_list?limit=40"),api("my_announcements")]);
+  if(!n.ok){toast(errText(n),"err");return}
+  const rows=n.j.rows||[],ann=a.ok?a.j.rows:[];
+  const d=dlg(`<div class="db"><div class="dh"><h2>Notifications${n.j.unread?` <span class="bd in">${num(n.j.unread)} unread</span>`:""}</h2><button class="ibtn" type="button" data-c aria-label="Close">${I("x")}</button></div>
+    <div class="acts" style="margin-bottom:10px">${n.j.unread?`<button class="btn ghost sm" type="button" data-all>${I("check")} Mark all as read</button>`:""}</div>
+    ${rows.length?`<div class="nlist">${rows.map(x=>`<div class="card nitem${x.read_at?"":" unread"}" data-id="${x.id}"><h3>${x.read_at?"":`<span class="bd in">new</span> `}${h(x.title)}</h3>${x.body?`<p class="small" style="margin:4px 0">${h(x.body)}</p>`:""}<p class="small">${when(x.created_at)}${x.link?` · <a href="${h(x.link)}" data-go="${x.id}">Open</a>`:""}${x.read_at?"":` · <button class="linkbtn" type="button" data-read="${x.id}">Mark read</button>`}</p></div>`).join("")}</div>`:empty("No notifications yet.","bell")}
+    <h3 style="margin:18px 0 8px">${I("megaphone")} Announcements</h3>${ann.length?ann.map(x=>`<div class="card"><h3>${badge(x.priority)} ${h(x.title)}</h3><p style="white-space:pre-wrap;margin:0">${h(x.message)}</p><p class="small">${when(x.publish_at)}</p></div>`).join(""):empty("No announcements for you right now.","bell")}</div>`,{drawer:true,label:"Notifications"});
+  $("[data-c]",d).onclick=()=>d.close();
+  const read=async ids=>{const r=await api("notif_read",ids==="all"?{all:true}:{ids});if(!r.ok){toast(errText(r),"err");return false}badges();return true};
+  const all=$("[data-all]",d);if(all)all.onclick=async()=>{if(await read("all")){d.close();toast("All notifications marked as read.","ok")}};
+  $$("[data-read]",d).forEach(b=>b.onclick=async()=>{if(await read([+b.dataset.read])){const c=b.closest(".nitem");c.classList.remove("unread");c.querySelector(".bd")?.remove();b.remove()}});
+  $$("[data-go]",d).forEach(l=>l.addEventListener("click",()=>{read([+l.dataset.go]);d.close()}));
+};
 const bump=()=>{last=Date.now();if(ME&&Date.now()-pingAt>60000){pingAt=Date.now();api("ping")}};
 ["pointerdown","keydown","touchstart","scroll"].forEach(ev=>addEventListener(ev,bump,{passive:true}));
 setInterval(async()=>{if(ME&&Date.now()-last>idleMs){await api("logout",{});lock();lerr("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}},10000);

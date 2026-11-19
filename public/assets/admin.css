@@ -156,3 +156,17 @@ dialog.drawer .db{max-height:100dvh;padding-bottom:calc(24px + env(safe-area-ins
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
 #bell{position:relative}#bell[data-count]:not([data-count="0"]):after{content:"";position:absolute;top:7px;right:7px;width:8px;height:8px;border-radius:50%;background:var(--bad);box-shadow:0 0 0 2px var(--card)}
+
+/* ===================== V5 ===================== */
+.clist{margin:4px 0 14px;padding-left:20px;display:grid;gap:6px;font-size:13.5px;color:var(--ink)}
+.clist li::marker{color:var(--bad)}
+.nlist{display:grid;gap:8px}
+.nitem h3{font-size:14px;margin:0}.nitem.unread{border-color:rgba(56,189,248,.5);background:linear-gradient(180deg,#14223B,var(--card))}
+.linkbtn{background:none;border:0;padding:0;color:var(--acc2);font:inherit;font-size:12.5px;cursor:pointer;text-decoration:underline;min-height:24px}
+.notice.warn b{color:#FDE68A}
+select[data-prio]{font:inherit;font-size:13px;color:var(--ink);background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:4px 8px;min-height:32px}
+.g21{display:grid;gap:16px;grid-template-columns:minmax(0,1fr)}.g21>div{min-width:0}
+@media (min-width:1200px){.g21{grid-template-columns:minmax(0,2fr) minmax(320px,1fr)}}
+.card .kv{grid-template-columns:minmax(96px,max-content) minmax(0,1fr)}
+@media (max-width:480px){.card .kv{grid-template-columns:minmax(0,1fr)}.card .kv dt{margin-top:6px}}
+dialog .clist{padding-left:18px}

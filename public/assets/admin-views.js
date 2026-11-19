@@ -7,8 +7,11 @@ const qs=o=>new URLSearchParams(Object.entries(o).filter(([,v])=>v!==""&&v!==und
 const refreshBtn=`<button class="btn ghost sm" type="button" data-refresh>${I("refresh")} Refresh</button>`;
 
 /* Generic list: filters + table + pagination + row actions. Returns {reload}. */
-A.list=function(el,cfg){
+A.list=function(host,cfg){
   const st={offset:0,f:{...(cfg.defaults||{})}};let rows=[];
+  // A fresh root per render: listeners die with it. (Attaching them to the persistent #main made handlers from
+  // previously visited lists fire too — e.g. "Edit announcement" also opened a team member form and a session-revoke dialog.)
+  host.innerHTML='<div class="lroot"></div>';const el=host.firstElementChild;
   el.innerHTML=page(cfg.title,cfg.icon,cfg.desc,(cfg.actions||"")+refreshBtn)+(cfg.top||"")+
     (cfg.filters&&cfg.filters.length?`<form class="bar" data-filters role="search">${cfg.filters.map(f=>`<div class="f${f.w?" wide":""}"><label for="flt_${f.n}">${h(f.l)}</label>${f.t==="select"?`<select id="flt_${f.n}" name="${f.n}">${f.o.map(([v,l])=>`<option value="${h(v)}"${String(st.f[f.n]??"")===String(v)?" selected":""}>${h(l)}</option>`).join("")}</select>`:`<input id="flt_${f.n}" name="${f.n}" type="${f.t||"search"}" value="${h(st.f[f.n]||"")}" ${f.t==="search"||!f.t?'placeholder="Search…" maxlength="60"':""}>`}</div>`).join("")}</form>`:"")+
     `<div data-list>${loading()}</div>`;
@@ -124,6 +127,22 @@ async function memberForm(m,reload){
       [{n:"is_public",l:"Show on public website",t:"checkbox",v:m?m.is_public:true},{n:"show_telegram",l:"Show Telegram username publicly",t:"checkbox",v:m?m.show_telegram:true}]],
     onSubmit:async v=>{const r=await api("team_save",{...v,id:m?.id,display_order:Number(v.display_order)});if(r.ok){toast("Team member saved.","ok");reload();return true}return errText(r)}});
 }
+// Team member details: profile, linked dashboard accounts (role + permissions), team structure, report counts.
+async function memberDrawer(m0,reload){
+  const r=await api("team_get?id="+encodeURIComponent(m0.id));if(!r.ok){toast(errText(r),"err");return}
+  const {member:m,accounts,report_counts:rc,leads,leader,can_manage_access}=r.j;
+  const d=A.drawer(m.display_name,`<div class="prow" style="margin-bottom:12px"><span class="pav" style="width:56px;height:56px">${h(ini(m.display_name))}${m.photo_url?`<img src="${h(m.photo_url)}" alt="">`:""}</span><span><b>${h(m.display_name)}</b><br><span class="small">${h(m.role_title)} · ${h(m.member_group)}</span><br>${badge(m.deleted_at?"removed":m.status)} ${m.is_public?badge("published").replace(">published<",">public<"):badge("draft").replace(">draft<",">hidden<")}</span></div>
+    <dl class="kv"><dt>Telegram</dt><dd>${m.telegram_username?"@"+h(m.telegram_username):"—"}${m.has_telegram_uid?` · UID ${h(m.telegram_uid)} <span class="small">(private)</span>`:""}</dd><dt>Facebook</dt><dd>${m.facebook_url?`<a href="${h(m.facebook_url)}" target="_blank" rel="noopener noreferrer">Profile</a>`:"—"}</dd>
+    <dt>Description</dt><dd>${h(m.bio||"—")}</dd><dt>Team leader</dt><dd>${leader?h(leader.display_name):"—"}</dd><dt>Leads</dt><dd>${leads.length?leads.map(x=>h(x.display_name)).join(", "):"—"}</dd><dt>Display order</dt><dd>${num(m.display_order)}</dd>
+    <dt>Added</dt><dd>${when(m.created_at)}</dd><dt>Updated</dt><dd>${when(m.updated_at)}</dd>${m.deleted_at?`<dt>Removed</dt><dd>${when(m.deleted_at)}</dd>`:""}
+    <dt>Reports</dt><dd>${num(rc.total)} total${Object.entries(rc).filter(([k])=>k!=="total").map(([k,v])=>` · ${h(k.replace(/_/g," "))} ${num(v)}`).join("")}</dd></dl>
+    <div class="card" style="margin-top:14px"><h3>${I("key-round")} Dashboard access (role &amp; permissions)</h3>${accounts.length?table([{l:"Account",f:x=>`${h(x.display_name)} <code>${h(x.uid_tail)}</code>`},{l:"Role",f:x=>h(x.role_id)},{l:"Extra permissions",f:x=>(x.grants||[]).map(g=>`<span class="bd">${h(g)}</span>`).join(" ")||"—"},{l:"Status",f:x=>badge(x.status)},{l:"",f:x=>can_manage_access&&x.uid?`<button class="btn ghost sm" type="button" data-acc="${h(x.uid)}">Change role / permissions</button>`:""}],accounts)
+      :`<p class="small">No dashboard account is linked to this member. ${can_manage_access?"Create one in User Management and link it to this member to give them a role and permissions.":""}</p>`}
+      <p class="small">Roles and permissions are enforced by the API; you can only grant permissions you hold.</p></div>
+    ${m.deleted_at?"":`<div class="acts" style="margin-top:14px"><button class="btn sm" type="button" data-e>${I("pencil")} Edit member</button></div>`}`);
+  const e=$("[data-e]",d);if(e)e.onclick=()=>{d.close();memberForm(m0,reload)};
+  $$("[data-acc]",d).forEach(b=>b.onclick=async()=>{const y=await api("staff_get?uid="+encodeURIComponent(b.dataset.acc));if(!y.ok){toast(errText(y),"err");return}d.close();staffForm(y.j.user,()=>memberDrawer(m0,reload))});
+}
 V.team=el=>{
   A.list(el,{title:"Team Management",icon:"user-plus",desc:"Database-backed team directory. Inactive and removed members keep their history and performance records.",
     actions:`<button class="btn sm" type="button" data-new>${I("plus")} Add member</button>`,op:"team_list",limit:500,
@@ -131,14 +150,15 @@ V.team=el=>{
     cols:[{l:"Member",f:m=>`<div class="prow"><span class="pav">${h(ini(m.display_name))}${m.photo_url?`<img src="${h(m.photo_url)}" alt="">`:""}</span><span><b>${h(m.display_name)}</b><br><span class="small">${h(m.role_title)}</span></span></div>`},
       {l:"Group",f:m=>h(m.member_group)},{l:"Telegram",f:m=>(m.telegram_username?"@"+h(m.telegram_username):"—")+(m.telegram_uid?' <span class="bd in" title="Private UID on file">UID</span>':"")},
       {l:"Public",f:m=>m.is_public?badge("published"):badge("draft")},{l:"Status",f:m=>badge(m.deleted_at?"removed":m.status)},{l:"Order",f:m=>num(m.display_order),c:"num"},
-      {l:"Actions",f:m=>m.deleted_at?"":`<div class="acts"><button class="btn ghost sm" data-act="edit">${I("pencil")}<span class="sr">Edit</span></button><button class="btn ghost sm" data-act="photo">${I("image")} Photo</button><button class="btn ghost sm" data-act="status">${m.status==="active"?"Deactivate":"Activate"}</button><button class="btn danger sm" data-act="del" aria-label="Remove">${I("trash")}</button></div>`}],
+      {l:"Actions",f:m=>m.deleted_at?`<button class="btn ghost sm" data-act="view">${I("eye")} View</button>`:`<div class="acts"><button class="btn ghost sm" data-act="view" aria-label="View ${h(m.display_name)}">${I("eye")}</button><button class="btn ghost sm" data-act="edit" aria-label="Edit ${h(m.display_name)}">${I("pencil")}<span class="sr">Edit</span></button><button class="btn ghost sm" data-act="photo">${I("image")} Photo</button><button class="btn ghost sm" data-act="status">${m.status==="active"?"Deactivate":"Activate"}</button><button class="btn danger sm" data-act="del" aria-label="Remove ${h(m.display_name)}">${I("trash")}</button></div>`}],
     act:async(a,m,btn,reload)=>{
+      if(a==="view")return memberDrawer(m,reload);
       if(a==="edit")return memberForm(m,reload);
       if(a==="photo")return formDlg({title:"Profile photo",intro:"JPG, PNG or WebP. The image is resized in your browser and checked again on the server (max 2 MB).",fields:[{n:"file",l:"Image",t:"file",accept:"image/jpeg,image/png,image/webp",req:true,px:800,maxBytes:2*1048576}],submit:"Upload",
         onSubmit:async v=>{const r=await api("team_photo",{id:m.id,file:v.file});if(r.ok){toast("Photo updated.","ok");reload();return true}return errText(r)}});
       if(a==="status"){const to=m.status==="active"?"inactive":"active";const c=await confirmAct({title:`${to==="active"?"Activate":"Deactivate"} ${m.display_name}?`,text:to==="inactive"?"They disappear from the public team page and stop receiving support alerts. History is kept.":"They reappear publicly (if marked public) and receive alerts again.",reason:true,confirm:to==="active"?"Activate":"Deactivate"});
         if(c&&(await A.run("team_status",{id:m.id,status:to,reason:c.reason},"Status updated.")).ok)reload();return}
-      if(a==="del"){const c=await confirmAct({title:`Remove ${m.display_name}?`,text:"Soft delete: the member is hidden everywhere, but their reports, revenue and performance history are preserved.",danger:true,reason:true,confirm:"Remove"});if(c&&(await A.run("team_delete",{id:m.id,reason:c.reason},"Member removed.")).ok)reload()}
+      if(a==="del"){const c=await confirmAct({title:`Remove ${m.display_name}?`,text:"Prefer <b>Deactivate</b> when someone leaves. Removal is a soft delete: the member is hidden everywhere, but their reports, conversations, audit records, revenue and performance history stay attributed to them.",danger:true,reason:true,confirm:"Remove"});if(c&&(await A.run("team_delete",{id:m.id,reason:c.reason},"Member removed.")).ok)reload()}
     }});
   $("[data-new]",el).onclick=()=>memberForm(null,()=>A.go());
 };
@@ -252,10 +272,12 @@ V.settings=async el=>{
       <label for="set_rl">Requests allowed before cooldown</label><input id="set_rl" type="number" min="1" max="20" value="${h(s.request_limit)}">
       <label for="set_cd">Cooldown (minutes)</label><input id="set_cd" type="number" min="5" max="1440" value="${h(s.cooldown_minutes)}">
       <label for="set_hf">Unsuccessful AI attempts before offering a human</label><input id="set_hf" type="number" min="1" max="5" value="${h(s.handoff_after_failures)}">
+      <label for="set_fr">First-reply SLA (minutes)</label><input id="set_fr" type="number" min="1" max="1440" value="${h(s.first_response_minutes??15)}">
+      <label for="set_rh">Resolution SLA (hours)</label><input id="set_rh" type="number" min="1" max="720" value="${h(s.resolution_hours??24)}">
       <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="set_ab"${site.announcement_banner?" checked":""}> Show public announcements on the website</label>
       <div class="ferr" role="alert"></div><button class="btn sm" type="submit" style="justify-self:start">Save settings</button></form>
-    <div class="card"><h3>${I("server")} Environment (read-only)</h3><dl class="kv"><dt>Currency</dt><dd>${h(env.currency)}</dd><dt>Timezone offset</dt><dd>UTC+${h(env.tz_offset)}</dd><dt>Admin idle timeout</dt><dd>${h(env.admin_idle_min)} min</dd><dt>AUTO_APPROVE</dt><dd>${env.auto_approve?"on":"off"}</dd><dt>APP_URL</dt><dd>${h(env.app_url||"not set")}</dd><dt>AI models</dt><dd>${h(env.ai_models.join(", "))}</dd></dl></div></div>`;
-  $("[data-s]",el).addEventListener("submit",async e=>{e.preventDefault();const x=await api("settings_save",{request_limit:$("#set_rl").value,cooldown_minutes:$("#set_cd").value,handoff_after_failures:$("#set_hf").value,announcement_banner:$("#set_ab").checked});
+    <div class="card"><h3>${I("server")} Environment (read-only)</h3><dl class="kv"><dt>Currency</dt><dd>${h(env.currency)}</dd><dt>Timezone offset</dt><dd>UTC+${h(env.tz_offset)}</dd><dt>Admin idle timeout</dt><dd>${h(env.admin_idle_min)} min</dd><dt>AUTO_APPROVE</dt><dd>${env.auto_approve?"set — no effect since V5 (reports come from the website portal and always start Pending)":"off"}</dd><dt>APP_URL</dt><dd>${h(env.app_url||"not set")}</dd><dt>AI models</dt><dd>${h(env.ai_models.join(", "))}</dd></dl></div></div>`;
+  $("[data-s]",el).addEventListener("submit",async e=>{e.preventDefault();const x=await api("settings_save",{request_limit:$("#set_rl").value,cooldown_minutes:$("#set_cd").value,handoff_after_failures:$("#set_hf").value,first_response_minutes:$("#set_fr").value,resolution_hours:$("#set_rh").value,announcement_banner:$("#set_ab").checked});
     if(x.ok)toast("Settings saved.","ok");else $(".ferr",el).textContent=errText(x)});
 };
 A.qs=qs;A.opts=opts;

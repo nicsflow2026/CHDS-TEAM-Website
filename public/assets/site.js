@@ -99,7 +99,8 @@ function renderStats(){
   $("#live-dot").className="dot"+(offline?" off":"");
   $("#c-upd").textContent=offline?"Live data is unavailable right now. Showing nothing rather than estimates.":"Live · updated "+ago(DATA.updated);
   $("#c-title").textContent=metric==="revenue"?"Team revenue":"Accounts recovered";
-  $("#recent").innerHTML=DATA.recent.length?DATA.recent.map(r=>`<div class="rrow"><div>${esc(r.n)} <span>· ${ago(r.ts)}</span></div><div><b>${r.recovered}</b> recovered · <b>${fmt(r.revenue)}</b></div></div>`).join(""):`<div class="rrow"><span>No approved reports yet.</span></div>`;
+  // published reports only (public fields; no per-report revenue) — same data as /reports
+  $("#recent").innerHTML=(DATA.recent.length?DATA.recent.map(r=>`<div class="rrow"><div>${esc(r.t||"Verified report")} <span>· ${esc(r.n)} · ${ago(r.ts)}</span></div><div>${r.recovered?`<b>${esc(r.recovered)}</b> recovered`:"Verified"}</div></div>`).join(""):`<div class="rrow"><span>No published reports yet.</span></div>`)+`<div class="rrow"><a href="/reports">See all verified reports →</a></div>`;
   chart();
 }
 function chart(){
@@ -154,13 +155,14 @@ const cview=$("#cview",W);
 let S={loaded:false,me:null,convs:[],conv:null,mode:"ai",sid:"",after:0,pollT:0,busy:false,offerReason:null,idem:null,shots:[],ocr:"",pending:[],agentShown:false,unread:0,quota:null,cdT:0};
 const setHeader=()=>{
   const human=S.mode!=="ai";
-  $("#ct").textContent=human?"CHDS Human Support":"CHDS AI Support";
-  $("#cst").textContent=S.mode==="wait"?"Waiting for Agent":S.mode==="human"?"Connected to Human Agent":FLAGS.ai_enabled?"Online · replies instantly":"AI temporarily unavailable";
-  $("#cd").className="dot"+(S.mode==="wait"||!FLAGS.ai_enabled?" off":"");
-  $("#c-new").hidden=human||!S.me;$("#c-list").hidden=!S.me;
+  const closed=S.mode==="closed";
+  $("#ct").textContent=closed?"Conversation closed":human?"CHDS Human Support":"CHDS AI Support";
+  $("#cst").textContent=closed?"Closed · read-only":S.mode==="wait"?"Waiting for Agent":S.mode==="human"?"Connected to Human Agent":FLAGS.ai_enabled?"Online · replies instantly":"AI temporarily unavailable";
+  $("#cd").className="dot"+(closed||S.mode==="wait"||!FLAGS.ai_enabled?" off":"");
+  $("#c-new").hidden=(human&&!closed)||!S.me;$("#c-list").hidden=!S.me;
 };
 const fmtWhen=t=>{try{return new Date(t).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}catch{return""}};
-const ST={active:["Active","in"],awaiting_confirmation:["Awaiting your confirmation","wa"],resolved:["Resolved","ok"],handoff:["With Human Support","wa"],closed:["Closed",""]};
+const ST={active:["Active","in"],awaiting_confirmation:["Awaiting your confirmation","wa"],resolved:["Resolved","ok"],handoff:["With Human Support","wa"],closed:["Closed · read-only","no"]};
 
 function openChat(o){W.classList.toggle("on",o);fab.setAttribute("aria-expanded",String(o));document.body.classList.toggle("chat-open",o);
   if(o){S.unread=0;fab.innerHTML=I("message-square");if(!S.loaded)boot();else setTimeout(()=>{const i=$("#ci")||$("#nm");i&&i.focus()},60)}else fab.focus()}
@@ -216,7 +218,7 @@ function nameView(){
 async function newConv(){
   const r=await call("/api/ai/new",{});
   if(!r.ok){if(r.status===401){S.me=null;return nameView()}info("We could not start a conversation. Please try again.","alert-triangle");return}
-  S.conv=r.j.conversation;S.convs=[S.conv,...S.convs.filter(c=>c.id!==S.conv.id)];S.idem=null;renderChat(r.j.messages||[]);
+  clearTimeout(S.pollT);S.sid="";S.mode="ai";S.conv=r.j.conversation;S.convs=[S.conv,...S.convs.filter(c=>c.id!==S.conv.id)];S.idem=null;renderChat(r.j.messages||[]);setMode("ai");
 }
 async function loadConv(id,greet){
   const r=await call("/api/ai/conversation?id="+encodeURIComponent(id));
@@ -226,8 +228,9 @@ async function loadConv(id,greet){
   renderChat(msgs);
   if(greet&&last&&Date.now()-Date.parse(last.created_at)>30*6e4&&S.conv.owner==="ai")add(greet,"bot");
   const h=r.j.handoff;
+  if(S.conv.locked){markLive(false);lockChat(h);return}
   if(h&&h.open){S.sid=h.sid;S.after=0;S.agentShown=false;setMode(h.status==="waiting"?"wait":"human");if(h.agent)agentCard(h.agent);markLive(true);poll(true)}
-  else{setMode("ai");markLive(false);if(S.conv.status==="awaiting_confirmation")confirmCard()}
+  else{setMode("ai");markLive(false);if(S.conv.status==="awaiting_confirmation")confirmCard();if(h&&h.can_rate)rateCard(h.request_id)}
 }
 function listView(){
   clearTimeout(S.pollT);
@@ -240,7 +243,7 @@ function listView(){
   $$(".citem",cview).forEach(b=>b.onclick=()=>loadConv(b.dataset.id));
 }
 $("#c-list",W).addEventListener("click",async()=>{if(!S.me)return;const r=await call("/api/ai/conversations");if(r.ok)S.convs=r.j.conversations;listView()});
-$("#c-new",W).addEventListener("click",()=>{if(S.me&&S.mode==="ai")newConv()});
+$("#c-new",W).addEventListener("click",()=>{if(S.me&&(S.mode==="ai"||S.mode==="closed"))newConv()});
 function renameDlg(){
   const d=document.createElement("div");d.className="cdlg";d.innerHTML=`<div role="dialog" aria-label="Change your name"><h4>Change your name</h4><input id="rn" value="${esc(S.me.display_name)}" maxlength="80" aria-label="Your name" style="font:inherit;font-size:16px;color:var(--ink);background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 12px"><div class="ferr" id="rn-err" role="alert"></div><div class="btns"><button class="btn ghost sm" type="button" data-x>Cancel</button><button class="btn sm" type="button" data-s>Save</button></div></div>`;
   cview.appendChild(d);$("#rn",d).focus();
@@ -258,7 +261,7 @@ function renderChat(msgs){
   <form class="cin" id="cf"><button type="button" class="cbtn" id="at" aria-label="Attach screenshot">${I("paperclip")}</button><input type="file" id="fi" accept="image/*" multiple hidden><input type="text" id="ci" placeholder="Type your message…" aria-label="Message" maxlength="2000" autocomplete="off"><button class="btn" type="submit" aria-label="Send">${I("send")}</button></form>`;
   msgs.forEach(m=>m.role==="user"?add(m.body,"me"):m.role==="assistant"?add(m.body,"bot"):m.role==="agent"?add(m.body,"ag",null,m.author):add(m.body,"sys"));
   if(msgs.length<=1&&S.conv&&S.conv.owner==="ai")["My account was hacked","Account disabled or locked","Lost Page admin access","I need a website"].forEach(t=>{const b=document.createElement("button");b.type="button";b.textContent=t;b.onclick=()=>send(t);$("#chips").appendChild(b)});
-  if(S.conv&&(S.conv.status==="resolved"||S.conv.status==="closed"))resolvedCard();
+  if(S.conv&&!S.conv.locked&&S.conv.status==="resolved")resolvedCard();
   wire();setHeader();setTimeout(()=>{const i=$("#ci");i&&i.focus()},60);
 }
 function add(t,cls,imgs,who){
@@ -276,6 +279,8 @@ function setMode(m){
   S.mode=m;setHeader();
   const hu=$("#hu"),hc=$("#hcancel"),hl=$("#hleave");if(!hu)return;
   hu.hidden=m!=="ai"||!FLAGS.human_enabled;hc.hidden=m!=="wait";hl.hidden=m!=="human";
+  const lock=m==="closed",ci=$("#ci");$$("#cf input,#cf button").forEach(x=>x.disabled=lock);$("#cf").classList.toggle("locked",lock);
+  if(lock){ci.placeholder="This conversation is closed";ci.setAttribute("aria-disabled","true");return}ci.removeAttribute("aria-disabled");
   $("#chips").innerHTML=m==="ai"?$("#chips").innerHTML:"";
   $("#ci").placeholder=m==="ai"?"Type your message…":m==="wait"?"Add details while you wait…":"Message the CHDS agent…";
 }
@@ -305,6 +310,28 @@ function confirmCard(){
   });
 }
 function resolvedCard(){const c=card(`<p>This conversation is resolved. You can still write here to reopen it, or start fresh.</p><div class="opts"><button class="opt pri" type="button">${I("message-plus")} Start a new conversation</button></div>`);if(c)$(".opt",c).onclick=()=>newConv()}
+// Closed (locked) case: read-only. The server rejects every message to it (HTTP 409); this only reflects that.
+async function lockChat(h){
+  clearTimeout(S.pollT);S.sid="";markLive(false);
+  if(S.conv){S.conv.locked=true;S.conv.status="closed"}
+  setMode("closed");$("#chips")&&($("#chips").innerHTML="");
+  if(!$(".closedbox",W)){const d=document.createElement("div");d.className="closedbox";d.setAttribute("role","status");
+    d.innerHTML=`<b>${I("lock")} This conversation has ended</b><p>CHDS Support closed this case. The conversation is now read-only: you can no longer send messages here, and neither the agent nor CHDS AI Support will reply in it. Your history stays available.</p><p>Need more help? Start a new conversation.</p><button class="btn sm" type="button" data-newc>${I("message-plus")} Start New Conversation</button>`;
+    const form=$("#cf");form?form.before(d):cview.appendChild(d);$("[data-newc]",d).onclick=()=>newConv();}
+  if(h===undefined&&S.conv){const r=await call("/api/ai/conversation?id="+encodeURIComponent(S.conv.id));h=r.ok?r.j.handoff:null}
+  if(h&&h.can_rate)rateCard(h.request_id);
+}
+const notice=t=>{if(t)add(t,"msg warnmsg")};
+function rateCard(id){
+  if(!id||$(".card-in[data-rate]",W))return;
+  const c=card(`<p><b>How was your experience with CHDS Human Support?</b></p><div class="stars" role="group" aria-label="Rating from 1 to 5">${[1,2,3,4,5].map(n=>`<button type="button" data-r="${n}" aria-pressed="false" aria-label="${n} star${n>1?"s":""}">${n}★</button>`).join("")}</div>
+    <label class="small" for="csc" style="display:block;margin:10px 0 4px">Comment (optional)</label><textarea id="csc" maxlength="500"></textarea><div class="ferr" role="alert"></div><div class="opts" style="margin-top:8px"><button class="opt pri" type="button" data-send disabled>Send feedback</button></div>`);
+  if(!c)return;c.dataset.rate="1";let val=0;
+  $$("[data-r]",c).forEach(b=>b.onclick=()=>{val=+b.dataset.r;$$("[data-r]",c).forEach(x=>x.setAttribute("aria-pressed",String(+x.dataset.r<=val)));$("[data-send]",c).disabled=false});
+  $("[data-send]",c).onclick=async e=>{e.currentTarget.disabled=true;const r=await call("/api/ai/feedback",{request_id:id,rating:val,comment:$("#csc",c).value});
+    if(r.ok||r.status===409){c.innerHTML=`<p>${I("circle-check")} Thank you for your feedback.</p>`;return}
+    e.currentTarget.disabled=false;$(".ferr",c).textContent=r.j.message||"Feedback could not be sent. Please try again."};
+}
 function agentCard(a){
   if(S.agentShown||!a)return;S.agentShown=true;
   const ini=String(a.name).split(/\s+/).map(w=>w[0]||"").join("").slice(0,2).toUpperCase();
@@ -336,7 +363,7 @@ function wire(){
 
 /* ---------- sending ---------- */
 async function send(t){
-  if(S.busy||!S.conv)return;
+  if(S.busy||!S.conv||S.mode==="closed")return;
   const sh=S.pending.splice(0);renderPrev();if(!t&&!sh.length)return;
   if(S.mode!=="ai")return sendHuman(t,sh);
   if(!FLAGS.ai_enabled){sys("CHDS AI Support is unavailable right now."+(FLAGS.human_enabled?" You can talk to a human agent instead.":""));if(FLAGS.human_enabled)offerHuman("other");return}
@@ -347,21 +374,24 @@ async function send(t){
   const r=await call("/api/chat",{conversation_id:S.conv.id,text:t||"Please review my screenshot.",ocr:o});
   w&&w.remove();S.busy=false;
   if(r.ok){
-    add(r.j.reply,"bot");S.conv.status=r.j.ask_confirmation?"awaiting_confirmation":"active";
+    notice(r.j.notice);add(r.j.reply,"bot");S.conv.status=r.j.ask_confirmation?"awaiting_confirmation":"active";
     if(r.j.offer_human)offerHuman(r.j.reason,r.j.reason==="user_requested"?"You asked for a person. Tap below and we'll forward this conversation to the CHDS team.":"This needs a CHDS team member. They will receive this conversation and a summary, so you won't have to repeat yourself.");
     else if(r.j.ask_confirmation)confirmCard();
     return;
   }
+  if(r.status===409&&r.j.error==="case_closed"){await lockChat();return}
   if(r.status===409&&r.j.error==="human_owned"){sys("A human agent is handling this conversation.");await loadConv(S.conv.id);if(S.mode!=="ai"&&t)sendHuman(t,[]);return}
   if(r.status===401){S.me=null;S.loaded=false;sys("Your chat session expired. Please enter your name again.");setTimeout(nameView,1200);return}
   if(r.status===429){add("You are sending messages too fast. Please wait a moment and try again.","msg err");return}
   if(r.j.error==="maintenance"){add("Support chat is paused for maintenance. Please try again later.","msg err");return}
   add("CHDS AI Support could not answer right now. Your message was saved."+(FLAGS.human_enabled?" You can talk to a human agent instead.":" Please try again shortly."),"msg err");
-  if(r.j.offer_human&&FLAGS.human_enabled)offerHuman(r.j.reason||"knowledge_limit");
+  notice(r.j.notice);if(r.j.offer_human&&FLAGS.human_enabled)offerHuman(r.j.reason||"knowledge_limit");
 }
 async function sendHuman(t,sh){
   S.busy=true;add(t,"me",sh);
-  try{for(let i=0;i<Math.max(1,sh.length);i++){const r=await call("/api/human/send",{sid:S.sid,text:i?"":t,img:sh[i]||""});if(!r.ok)throw new Error(String(r.status));if(r.j.st==="ended"){await backToAI();break}}}
+  try{for(let i=0;i<Math.max(1,sh.length);i++){const r=await call("/api/human/send",{sid:S.sid,text:i?"":t,img:sh[i]||""});
+    if(r.status===409&&r.j.error==="case_closed"){add("Not sent: this case is closed.","msg err");S.busy=false;await lockChat();return}
+    if(!r.ok)throw new Error(String(r.status));if(!i)notice(r.j.notice);if(r.j.st==="ended"){if(r.j.locked)await lockChat();else await backToAI();break}}}
   catch{add("Message could not be delivered. Please try again.","msg err")}
   S.busy=false;
 }
@@ -390,6 +420,7 @@ function confirmHandoff(reason){
     b.disabled=false;b.innerHTML=`${I("headset")} Connect`;$("[data-x]",d).disabled=false;
     const err=$("#hd-err",d);
     if(r.j.error==="support_limit")return countdown(err,r.j.retry_after,r.j.limit);
+    if(r.j.error==="case_closed"){d.remove();return lockChat()}
     err.textContent=r.j.error==="human_disabled"?"New Human Support requests are paused right now. Please message us on Telegram @"+CONFIG.TG+".":r.j.error==="no_team"?"No support team is configured yet. Please message us on Telegram @"+CONFIG.TG+".":r.status===401?"Your chat session expired. Please refresh the page.":r.status===429?"Please wait a moment before trying again.":"We could not send your request. Nothing was created — please try again.";
   };
 }
@@ -406,6 +437,7 @@ async function poll(now){
   const r=await call(`/api/human/poll?sid=${encodeURIComponent(S.sid)}&after=${S.after}`);
   if(r.ok){
     r.j.msgs.forEach(m=>{S.after=Math.max(S.after,m.i);m.f==="agent"?add(m.t,"ag",null,m.a):sys(m.t)});
+    if(r.j.locked||r.j.status==="closed"){await lockChat();return}
     if(r.j.st==="ended"){await backToAI();return}
     if(r.j.st==="live"){if(S.mode!=="human")setMode("human");agentCard(r.j.agent)}
     else{$("#cst").textContent="Waiting for Agent";}
@@ -416,7 +448,8 @@ async function backToAI(){
   clearTimeout(S.pollT);
   // resume AI only after the backend confirms ownership changed
   const r=await call("/api/ai/conversation?id="+encodeURIComponent(S.conv.id));
-  if(r.ok&&r.j.conversation.owner==="ai"){S.conv=r.j.conversation;S.sid="";markLive(false);setMode("ai");if(S.conv.status==="resolved")resolvedCard();return}
+  if(r.ok&&r.j.conversation.locked){S.conv=r.j.conversation;return lockChat(r.j.handoff)}
+  if(r.ok&&r.j.conversation.owner==="ai"){S.conv=r.j.conversation;S.sid="";markLive(false);setMode("ai");if(S.conv.status==="resolved")resolvedCard();if(r.j.handoff&&r.j.handoff.can_rate)rateCard(r.j.handoff.request_id);return}
   S.pollT=setTimeout(()=>poll(true),4000);
 }
 function leave(waiting){
@@ -424,7 +457,7 @@ function leave(waiting){
   const d=document.createElement("div");d.className="cdlg";
   d.innerHTML=`<div role="alertdialog" aria-labelledby="lv-t"><h4 id="lv-t">${waiting?"Cancel your request?":"Leave the chat with the agent?"}</h4><p>${waiting?"The team will no longer see it in the queue.":"The agent can no longer reply here. CHDS AI Support will continue with the full conversation."}</p><div class="btns"><button class="btn ghost sm" type="button" data-x>Stay</button><button class="btn sm" type="button" data-ok>${waiting?"Cancel request":"Leave chat"}</button></div></div>`;
   cview.appendChild(d);$("[data-x]",d).onclick=()=>d.remove();
-  $("[data-ok]",d).onclick=async e=>{e.currentTarget.disabled=true;const r=await call("/api/human/end",{sid:S.sid});d.remove();if(!r.ok){sys("That did not work. Please try again.");return}await backToAI()};
+  $("[data-ok]",d).onclick=async e=>{e.currentTarget.disabled=true;const r=await call("/api/human/end",{sid:S.sid});d.remove();if(r.status===409&&r.j.error==="case_closed")return lockChat();if(!r.ok){sys("That did not work. Please try again.");return}await backToAI()};
 }
 
 // A Human Support chat that was open on another page keeps receiving agent messages here.
