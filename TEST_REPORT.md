@@ -1,78 +1,146 @@
-# Test report — V5 (new-upgraded.txt)
+# CHDS V6 — test report
 
-Environment: Node 22, headless Chromium (Playwright), **no PostgreSQL and no network access** in the build environment.
+Date: 2026-11-20 · Node 22.23.5 · headless Chromium (Playwright) · **all results below were produced by actually
+running the commands listed; nothing is claimed that was not executed.**
 
-## Executed and passing
+## What could NOT be tested here (read first)
+
+| Not tested | Why | What to do |
+|---|---|---|
+| Migration `004_v6_publishing_deletion.sql` on **PostgreSQL** | no database server was available in the build environment (no network, no `psql`) | apply it to a **development** Supabase project first; run the verification queries in MIGRATION_GUIDE.md |
+| Real **Supabase Storage** (bucket creation, `HEAD` existence check, folder listing, deletion) | same | follow the smoke test in DEPLOYMENT_GUIDE.md |
+| Real **Telegram Bot API** (command menus per scope/language, message edits) | no network | run *Connect Telegram bot* and check the reported `scopes_checked` / problems |
+| Real **Groq** AI | no network | *Test AI* in System Health |
+| **Deployment** to Vercel | not performed | DEPLOYMENT_GUIDE.md |
+| Actual touch hardware, Safari/WebKit, Firefox | only Chromium is installed | test on real devices |
+
+All server logic ran end to end through the **real API handlers and bot code** against an in-memory test double
+(`tests/support/fake.mjs`) that emulates PostgREST, the SQL functions' **contracts** (including transaction rollback
+of `report_purge_finish`, the deletion lock, unique open jobs, append-only tables), Supabase Storage (upload,
+download, exact-key delete, HEAD, folder list, failure injection) and the Telegram Bot API. The emulation proves the
+application logic; it does **not** prove the SQL text itself.
+
+## Summary of executed runs
 
 | Command | Result |
 |---|---|
-| `npm run check` | OK. Syntax and module linking of every file; `public/` secret scan (25 files); 6 `vercel.json` patterns cover the 10 functions exactly once. |
-| `npm test` | **111 / 111 pass**: `unit` + `api` + `admin` (the 64 pre-V5 tests) + `v5` (47). |
-| `node scripts/dev-server.mjs --fake` + `python3 tests/visual/run_flows.py` (fresh server) | **20 / 20** end-to-end UI flows: CSAT card after resolution, Reopen with mandatory reason, Publish → public feed, Reports CSV download, KB / quick reply creation, unsafe instructions refused, notifications marked read, team photo upload to the clicked member, portal submit / edit / delete. No unexpected browser errors. |
-| `node scripts/dev-server.mjs --fake` + `python3 tests/visual/run_visual.py` | **0 problems.** 70 public-page checks, 196 dashboard checks (26 views + open/closed handoff detail + notification center × 7 widths), **41 interaction checks**, 2 chat flows, 78 accessibility scans, 63 JPEG screenshots in `tests/visual/screens/`. |
+| `npm test` (unit, api, admin, v5, **v6**, **imagemeta**) | **135 / 135 passed**, 0 failed |
+| `npm run check` (syntax of every JS file, server module linking, vercel.json rules, secret scan of 27 public files) | **OK** |
+| `python3 tests/visual/run_v6.py` (V6 UI at **13 widths**: 320, 360, 375, 390, 430, 480, 768, 820, 1024, 1280, 1366, 1440, 1920) | **333 checks, 0 problems** (`tests/visual/report_v6.json`, screenshots in `tests/visual/screens_v6/`) |
+| `python3 tests/visual/run_visual.py` (V5 responsive suite, now at the same **13 widths**) | **0 problems** — 130 public-page checks, 364 dashboard checks, 41 interaction checks, 2 chat flows, 78 accessibility scans (`tests/visual/report.json`, screenshots in `tests/visual/screens/`) |
+| `python3 tests/visual/run_flows.py` (V5 end-to-end UI flows) | **20 / 20 flow checks passed**, 0 unexpected errors (CSAT, reopen, publish → public feed, CSV export, knowledge base, notifications, team photo, portal submit / edit / withdraw) |
+| Browser smoke test of the whole V6 path (gallery → lightbox → chat → photo selection → permanent deletion with password re-confirmation → 3-file portal upload) | passed, **0 JS errors, 0 CSP violations** |
+| `lib/imagemeta.js` against real JPEG/PNG/WebP files written by Pillow (GPS EXIF, camera make, JPEG comment, PNG text chunks, WebP EXIF), outputs re-decoded by Pillow | all metadata removed, JPEG orientation kept, all outputs decode |
 
-Before V5 work started, the baseline was 64/64 tests. Two pre-existing assertions were updated because V5 changes that behaviour on purpose:
-* return-to-AI now produces `ended` (not `closed`);
-* a Founder now holds 23 permissions (not 18).
+### V5 tests changed on purpose
 
-### What the V5 tests cover
-* **Case closure — all 22 required scenarios** (`tests/v5.test.mjs` `[1]`–`[22]`). The UI scenarios are also exercised in the browser:
-  * the modal lists all six consequences;
-  * Cancel leaves the case open (status re-read from the API);
-  * Confirm closes it;
-  * the customer widget turns read-only with input and send disabled;
-  * a stale frontend submit adds nothing;
-  * Start New Conversation works.
-* **Further closure checks:**
-  * Resolved ≠ Closed.
-  * Telegram Close needs confirmation and permission.
-  * A reply to an ended chat is never re-routed to another customer.
-  * A reply generated while the case was being closed is discarded.
-  * Simultaneous message + closure (3 races) always leaves the closing notice last.
-* **Telegram:** `/report` removed, `/portal` added, multiple team UIDs parsed (spaces and invalid entries handled), deactivated members refused.
-* **Password policy:**
-  * redaction before storage, AI context and Telegram, with a customer notice;
-  * agent requests blocked (dashboard and Telegram);
-  * unsafe AI output replaced and not stored;
-  * knowledge entries, quick replies and instructions that ask for credentials rejected;
-  * official FAQ present;
-  * unit tests for the redaction and detection rules, including false-positive checks.
-* **Knowledge Base:** CRUD (audited); relevant enabled entries reach the prompt; disabled ones don't; admin instructions come before the fixed security policy.
-* **Report portal:** sign-in without enumeration, code sent only to the authorized account, HttpOnly session, CSRF check, 401 without a session, server-set owner/status/source (forged fields ignored), validation, 2024/2025 activity dates, future dates only for planned types, duplicate blocking, redaction, approver alerts.
-* **My Reports:** owner-only lists and details; other owners' IDs return 404 for read, update, delete, archive and evidence; search and date filters; corrections → edit → approve → publish; editing an approved+published report resets it to Pending, unpublishes it and notifies; delete/archive eligibility; deactivated member loses access on the next request.
-* **Public feed:** only published reports; no private fields (owner ID, account info, description, revenue, actor IDs); search/category/date filters; archive removes the report.
-* **Admin reports:** activity-date vs submission-date filters, archived view, CSV with both dates, audit of every action.
-* **Team:** View (UID masked), safe delete; the UI click tests cover View, Edit, Delete and Deactivate acting on the clicked row.
-* **Notifications:** permission-scoped, assignment notifications, one notification per unread burst, no message text, read/unread, badge.
-* **Support:** priority, escalation (note required), SLA data, unread marking, CSAT (own case only, once, after handling); 3-per-hour limit with **5 simultaneous requests** (exactly 3 accepted) and idempotent retries.
-* **Operations Analytics:** activity vs submission basis; sections scoped by permission.
+Three V5 assertions described behaviour the V6 specification removes; they were rewritten, not deleted:
 
-## Defects found during this work and fixed
-1. **Team Management Edit/Delete (and Session Revoke, Announcement Edit/Publish/Archive).** Row buttons received `null` because `table()` only set `data-row` on clickable tables. Reproduced in Chromium first: Edit opened an empty "Add" form, and Delete threw `Cannot read properties of null`.
-2. **Stale list handlers.** Every list attached handlers to the persistent `#main` element, so one click ran the handlers of earlier lists. "Edit announcement" also opened a team member form and a session-revoke dialog. Found by the new interaction tests.
-3. **AI reopened closed conversations.** `/api/chat` reset `closed` to `active` on any new message.
-4. **Wrong-customer routing in Telegram.** A reply to an ended chat was sent to the agent's other active chat.
-5. **`hidden` attribute overridden by `.btn`** on public pages ("Load more" shown when nothing was left; it would also have shown the portal's Sign out button).
-6. Layout overflow on the new handoff detail page at ≤1024 px (inline grid) — fixed before delivery.
+1. `v5: Telegram: /report was removed …` — now asserts `/myreports` is **not** a command and `/report` is unrecognized.
+2. `v5: Telegram /delete follows the website rules …` → `… the retired /delete and /myreports commands and old delete buttons no longer delete anything`.
+3. `api: founder … holds every permission` — permission count 23 → **24** (`delete_reports`).
 
-### Found in the post-delivery audit (second pass) and fixed
-7. **Homepage "Recent results" showed every approved report, published or not**, with the reporter's name and revenue. That contradicted the publication rule (§7) and the Publish dialog. It now shows published reports only, using their public fields and no per-report revenue (`stats_json` replaced in 003). Totals and the chart remain aggregates of approved reports, as before.
-8. **Telegram `/delete` bypassed the website rules.** Owners could delete their own approved or published reports, and any approver could delete reports. Telegram now applies the same rules as the portal and dashboard: owners can delete only reports that are not approved and not published; staff need `manage_reports`. `/myreports` offers delete buttons only for deletable reports and says "Approved total" instead of the misleading "Published total".
-9. **A dashboard dialog could stay open over another page** after Back, a notification link, or a page change following Publish, blocking that page's buttons. A route change now closes open dialogs.
-10. **Portal form validation:** an unticked confirmation box marked all 10 fields red instead of only the checkbox. Fixed. The last native `alert()` in the portal was replaced by an accessible dialog.
-11. The test double lacked `user_totals`, so `/myreports` had never been exercised by tests. It is now emulated and tested.
+The two Telegram tests also had a hidden coupling: when the first assertion of the old `/delete` test failed, its
+clean-up line never ran and a published fixture leaked into two later tests (public feed, admin filters). The
+rewritten test keeps the clean-up, and both later tests pass unchanged.
 
-## NOT verified here (needs live services) — please run these
-* **The SQL was not executed against PostgreSQL** (none was available). Migration 003 was reviewed statement by statement against 001/002: constraint names, append-only history triggers, the relabel, and a line-by-line diff of every replaced function. The RPCs and triggers are JavaScript emulations in the tests. **Run the verification queries and the lock smoke test in [docs/MIGRATIONS.md](docs/MIGRATIONS.md) on staging first.** Real lock contention between simultaneous transactions can only be confirmed on PostgreSQL.
-* Telegram delivery: portal codes, `/portal`, Close-case buttons and the notification messages. Members must have pressed /start in the bot to receive codes.
-* Groq: live answer quality with the knowledge base.
-* Vercel deployment: 10 functions, headers on `/report-portal`.
-* Supabase Storage signed URLs for portal evidence.
-* The manual checklist in [docs/TESTING.md](docs/TESTING.md#manual-checks-that-need-live-services).
+## Requirement coverage (automated)
 
-## Known limitations
-* **Secret detection is pattern-based.** It catches the common forms in English and Filipino ("password is …", "password ko ay …", OTP/login/recovery codes of 6–10 digits, cookies, tokens, JWTs). It can miss unusual phrasing, and the ask-detector deliberately ignores negated sentences ("never share your password").
-* **Public feed and notification counts update by polling** (30 s and 30 s), not push.
-* **Telegram "Close case"** requires the agent to have a dashboard role with `close_support_cases`. Telegram-only team members must ask someone with a dashboard account.
-* **Reopening returns the conversation to AI Support**, not into the old human chat. The customer can request a human again, which creates a new case.
-* **Owners cannot delete approved reports** (by design); an administrator can.
+### Report portal photo publishing — `tests/v6.test.mjs`
+| Scenario | Result |
+|---|---|
+| Submit report with multiple images (portal) | pass |
+| Selection refused before approval; approval alone does not publish | pass |
+| Select 2 of 3 photos, publish → exactly 2 photos public; public bucket URLs; width/height (EXIF-rotated) and alt text | pass |
+| Unselected photos stay private; originals stay in `report-evidence`; public copies metadata-free | pass |
+| Public JSON contains no `report-evidence`, evidence IDs, hashes, uploader, account info, sizes | pass |
+| Replace (old object deleted), alt text, remove (object deleted), PDF refused | pass |
+| Unpublish → public objects deleted, report gone from API; republish → **new** URLs | pass |
+| Search finds published reports only | pass |
+| Support agent without `publish_reports` → 403 | pass |
+| Material edit by editor without `approve_reports` → back to Pending + unpublished + public copies removed; public-fact edit → unpublished; internal edit by approver → unchanged; owner edit of published report → copies removed | pass |
+
+### Permanent deletion — `tests/v6.test.mjs` (a control report is verified byte-identical after every scenario)
+| Scenario | Result |
+|---|---|
+| Pending report with one photo | pass — row, history, revenue, notes, notifications, Telegram log, bot state and file gone; audit redacted; Telegram cards edited |
+| Published report with multiple public photos (+ private evidence), no unpublish first | pass — 6 files gone; feed, search and homepage totals (revenue −5000, reports −1) updated |
+| Private evidence only; no attachments; approved; previously edited; owner-withdrawn | pass |
+| Multiple related records (2 notes, revenue + revenue history, staff notifications, pending Telegram reject step) | pass |
+| Failed storage deletion → 502, report hidden + locked (edit/publish/photo 423, owner 404), job open, retry completes | pass |
+| Object survives removal / Storage cannot confirm → **never** reported as deleted; same job resumed | pass |
+| Failed database deletion → transaction rolled back, job `storage_deleted`, retry completes | pass |
+| Duplicate requests (3 concurrent) → one job, no damage; repeat after success → 404 | pass |
+| Unauthorized: administrator / support agent 403, no password re-confirmation 428, wrong typed ID 400, no reason 400, no session 401 — nothing deleted, no job | pass |
+| Orphaned upload in the report folder swept; a DB path pointing at another report's file is **not** deleted | pass |
+| After success: no row in any report table, no audit entry targets the ID, no report text in the audit log, no object in either bucket, not in public API or search, journal keeps no report ID / paths / content | pass (checked by `assertGone` for every scenario) |
+
+### AI Support
+| Scenario | Where | Result |
+|---|---|---|
+| Open launcher, load, send, receive (13 widths) | run_v6.py | pass |
+| Failed reply → Retry answers the saved message; user message stored once; repeat retry refused; another visitor cannot retry | v6.test.mjs | pass |
+| Network failure → Retry → no duplicate in the UI; stable after page refresh | run_v6.py | pass |
+| Human handoff → agent accepts → agent reply; refresh resumes after mirrored message IDs (0 re-delivered); no internal metadata sent | v6.test.mjs | pass |
+| Waiting state shows the request ID | run_v6.py | pass |
+| Close case → customer send 409, retry 409 `case_closed` | v6.test.mjs | pass |
+| Delayed new-request alert after closure → 0 Telegram messages, stopped; retry → `not_waiting` | v6.test.mjs | pass |
+| Start a new conversation after closure; V5 closure scenarios (22) | v5.test.mjs | pass |
+
+### Loading system
+| Scenario | Where | Result |
+|---|---|---|
+| Skeletons (feed, chat, admin tables), button loading/disabled states, duplicate submission ignored, upload progress, confirmed-only success, reduced motion (no infinite animations running) | run_v6.py + smoke | pass |
+| Request timeout / failed request → error + retry state (chat network abort) | run_v6.py | pass |
+| Stale list responses ignored (dashboard, public feed) | code review only — no automated race test | — |
+
+### Telegram — `tests/v6.test.mjs`
+| Scenario | Result |
+|---|---|
+| Exactly `/help /portal /chats /quene /offline /online /cancel`; spelling `quene` | pass |
+| Sync clears seeded old commands in `default`, `default/en`, `chat:1000`, `all_group_chats`, then verifies by reading back; re-pollution of `tl` cleaned | pass |
+| `/help` lists only the seven; `/myreports /total /delete /pending /queue /report /skip` unrecognized; `/start` onboards; `/portal` link has no credentials | pass |
+| `/quene` Accept + View Details; two agents accept concurrently → assigned exactly once, loser told who accepted | pass (fake is single-threaded; the SQL uses `SELECT … FOR UPDATE`) |
+| `/chats` reference, name, status, last activity; resolved chats not listed | pass |
+| `/offline` keeps assignment; `/online`; `/cancel` expires only own step, availability unchanged, other agent's step untouched, case untouched; "Nothing to cancel" | pass |
+| Skip-summary button replaces `/skip` | pass |
+
+### Responsive (13 widths)
+`run_v6.py`: no horizontal overflow on `/reports`, chat and portal; chat panel, launcher, lightbox image and controls,
+and the delete modal inside the viewport; gallery frames keep 4:3. `run_visual.py`: every public page and dashboard
+view at all 13 widths (see result above).
+
+### A regression the V5 suite caught during V6 work
+
+The first 13-width run of `run_visual.py` reported 4 problems: the redesigned chat header said "Waiting for an agent"
+and "Read-only · …" where the rest of the platform says **"Waiting for Agent"** and **"Closed · read-only"**. The
+widget was corrected (not the tests) to keep one vocabulary; the rerun reported 0 problems. Two other first-run
+failures were in the test scripts themselves (they assumed 360 px was the first width; fixed to use the first
+configured width).
+
+## Bugs found and fixed (with regression tests)
+
+| Bug | Fix | Test |
+|---|---|---|
+| Chat: pressing Enter while a reply was pending cleared the input and dropped the text | input kept until a send is accepted | run_v6.py (send states) |
+| Chat: after a refresh during a human chat, every agent/system message appeared twice | transcript exposes the room message ID; polling resumes after it; client de-duplicates | v6.test.mjs + run_v6.py |
+| Chat: a failed AI reply could only be "retried" by sending the message again (stored twice) | `retry_of` | v6.test.mjs + run_v6.py |
+| Telegram alerts could continue after a case was closed mid-broadcast | per-recipient state check | v6.test.mjs |
+| Evidence upload failing after the file reached Storage left an orphaned file | upload → row, rollback on failure | covered by deletion orphan sweep test |
+| Dashboard requests had no timeout (spinner could run forever); lists could render stale responses | timeouts + stale guards | smoke / code review |
+| Owner-withdrawn reports were invisible to administrators | "Withdrawn by owner" filter | v6.test.mjs |
+| Homepage heading said "Latest approved reports" for published-only data | label corrected | — |
+| Test double: Storage DELETE was a no-op (deletion could never be proven) | real exact-key delete, HEAD, list, failure injection | all deletion tests |
+
+## Known issues / remaining risks
+
+* Migration 004 not executed on PostgreSQL (see top). The SQL was reviewed by hand; the PL/pgSQL field accesses in
+  `audit_log_immutable()` are nested so no branch reads a column the current table lacks.
+* Earlier backups (CHDS and Supabase) still contain deleted reports; caches may show a removed public photo for up
+  to ~5 minutes (PERMANENT_DELETION.md).
+* Dashboard and public-feed stale-response guards and the dashboard request timeout have no automated race/timeout test.
+* The deletion step list in the dashboard reflects the server's final result, not live progress (the deletion is one request).
+* Telegram cannot edit messages older than 48 hours: such review cards keep their old text after a deletion.
+* Language-specific Telegram menus are cleared for none/`en`/`tl` plus `TELEGRAM_COMMAND_LANGS`; Telegram offers no
+  API to list which languages a bot ever used.
+* `docs/` (V5 documents) were left as historical references; the V6 documents at the repository root supersede them where they differ.
