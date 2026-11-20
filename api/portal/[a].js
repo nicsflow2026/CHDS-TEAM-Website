@@ -3,14 +3,16 @@
 // (HttpOnly cookie, hashed server-side, 30 min idle / 2 h absolute). Every protected call re-validates the
 // session AND the team authorization (deactivated members lose access immediately). Report ownership is the
 // session's verified UID — never a UID, owner or status sent by the browser.
-import { randomBytes, randomInt, createHash } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { api, sb, rpc, jsonBody, limited, hit, sameOrigin, audit, securityEvent, clientIp, userAgent, cookies, say, esc, q, UID, RID, settings, isUnique, warn, like, money } from "../../lib/core.js";
 import { isDate, decodeFile, oneOf } from "../../lib/validate.js";
 import { today, addDays } from "../../lib/time.js";
 import { isAuthorizedReporter, approverUids, reporterProfile } from "../../lib/reporters.js";
 import { reportFields, dateCheck, ownerView, REPORT_CATEGORIES, CATEGORY_LABEL, FUTURE_DAYS, STATUS_LABEL } from "../../lib/reports.js";
 import { REDACTION_NOTICE } from "../../lib/secrets.js";
-import { upload, signedUrl } from "../../lib/storage.js";
+import { signedUrl } from "../../lib/storage.js";
+import { storeEvidence } from "../../lib/admin/business.js";
+import { syncAfterUnpublish } from "../../lib/publicimages.js";
 import { notifyText } from "../../lib/notify.js";
 import { notifyStaff } from "../../lib/staffnotify.js";
 import { hex, same } from "../../lib/admin/auth.js";
@@ -42,7 +44,8 @@ async function session(req, res) {
   if (next - Date.parse(r.expires_at) > 60000) await sb(`/portal_sessions?id=eq.${id}`, { method: "PATCH", body: { expires_at: new Date(next).toISOString(), last_seen_at: new Date().toISOString() }, prefer: "return=minimal" }).catch(warn("portal touch"));
   return { id, uid: r.uid, row: r };
 }
-const own = async (uid, id) => RID.test(id) ? (await sb(`/reports?id=eq.${q(id)}&uid=eq.${q(uid)}&deleted_at=is.null&select=*`))[0] || null : null;
+// Reports withdrawn by the owner (deleted_at) or being permanently deleted (deletion_pending_at) are not the owner's anymore.
+const own = async (uid, id) => RID.test(id) ? (await sb(`/reports?id=eq.${q(id)}&uid=eq.${q(uid)}&deleted_at=is.null&deletion_pending_at=is.null&select=*`))[0] || null : null;
 const actor = uid => "portal:" + uid;
 const fieldErr = (res, errors) => res.status(400).json({ error: "invalid", message: errors[0], errors });
 const cardText = r => `Reference: <code>${r.id}</code>\nTitle: ${esc(r.title)}\nCategory: ${esc(CATEGORY_LABEL[r.category] || r.category)}\nActivity date: <b>${r.report_date}</b>\nRecovered: ${r.recovered} · Earnings: ${money(r.revenue)}`;
@@ -123,7 +126,7 @@ export default api(async (req, res) => {
       qy.archived === "1" ? "&archived_at=not.is.null" : qy.archived === "all" ? "" : "&archived_at=is.null",
       isDate(qy.from) ? `&${basis}=gte.${dt(qy.from)}` : "", isDate(qy.to) ? `&${basis}=${basis === "created_at" ? "lt" : "lte"}.${basis === "created_at" ? dt(addDays(qy.to, 1)) : qy.to}` : "",
       qy.q ? `&or=(id.ilike.${like(qy.q)},title.ilike.${like(qy.q)},description.ilike.${like(qy.q)})` : ""].join("");
-    const r = await sb(`/reports?uid=eq.${q(uid)}&deleted_at=is.null${f}&select=*&order=${qy.sort === "submitted" ? "created_at.desc" : "report_date.desc,created_at.desc"}&limit=${limit}&offset=${offset}`, { count: true });
+    const r = await sb(`/reports?uid=eq.${q(uid)}&deleted_at=is.null&deletion_pending_at=is.null${f}&select=*&order=${qy.sort === "submitted" ? "created_at.desc" : "report_date.desc,created_at.desc"}&limit=${limit}&offset=${offset}`, { count: true });
     return res.json({ total: r.total, offset, limit, rows: r.rows.map(x => ownerView(x, uid)) });
   }
   if (a === "report" && req.method === "GET") {
@@ -136,8 +139,8 @@ export default api(async (req, res) => {
   }
   if (a === "evidence" && req.method === "GET") {
     const eid = parseInt(req.query.id); if (!(eid > 0)) return res.status(400).json({ error: "bad_request" });
-    const e = (await sb(`/report_evidence?id=eq.${eid}&select=id,path,mime,report_id,report:reports(uid,deleted_at)`))[0];
-    if (!e || !e.report || e.report.uid !== uid || e.report.deleted_at) return res.status(404).json({ error: "not_found" });
+    const e = (await sb(`/report_evidence?id=eq.${eid}&select=id,path,mime,report_id,report:reports(uid,deleted_at,deletion_pending_at)`))[0];
+    if (!e || !e.report || e.report.uid !== uid || e.report.deleted_at || e.report.deletion_pending_at) return res.status(404).json({ error: "not_found" });
     await audit(actor(uid), "report_evidence_viewed", { via: "portal" }, { target: e.report_id, req });
     return res.json({ url: await signedUrl("report-evidence", e.path, 120), mime: e.mime, expires_in: 120 }); // private bucket, short-lived signed URL
   }
@@ -163,11 +166,7 @@ export default api(async (req, res) => {
     }
     let warning = null;
     if (file) {
-      const path = `${created.id}/${randomBytes(6).toString("hex")}.${file.ext}`;
-      try {
-        await upload("report-evidence", path, file.buf, file.mime);
-        await sb("/report_evidence", { method: "POST", body: { report_id: created.id, path, mime: file.mime, size_bytes: file.buf.length, sha256: createHash("sha256").update(file.buf).digest("hex"), uploaded_by: actor(uid) }, prefer: "return=minimal" });
-      } catch (e) { console.error("portal evidence upload", String(e.message).slice(0, 120)); warning = "The report was saved, but the evidence file could not be uploaded. Add it again from the report details."; }
+      try { await storeEvidence(created.id, file, actor(uid)); } catch (e) { console.error("portal evidence upload", String(e.message).slice(0, 120)); warning = "The report was saved, but the evidence file could not be uploaded. Add it again from the report details."; }
     }
     await audit(actor(uid), "report_submitted", { via: "portal", activity_date: created.report_date, evidence: !!file && !warning, redacted: v.redacted }, { target: created.id, req });
     const approvers = (await approverUids()).filter(x => x !== uid);
@@ -190,6 +189,7 @@ export default api(async (req, res) => {
     const o = await rpc("report_owner_update", { p_id: id, p_uid: uid, p_patch: patch });
     if (!o.ok) return res.status(o.error === "not_found" ? 404 : 409).json({ error: o.error, message: o.error === "archived" ? "Restore the report before editing it." : undefined });
     await audit(actor(uid), "report_owner_edited", { fields: Object.keys(patch), reset_to_pending: o.prev_status !== "pending", was_published: !!o.was_published, redacted: v.redacted }, { target: id, prev: { status: o.prev_status }, next: { status: "pending" }, req });
+    if (o.was_published) await syncAfterUnpublish(id); // its public photo copies stop being reachable
     if (o.prev_status !== "pending") { // material change of a reviewed / approved / returned report → re-validation
       await notifyStaff({ perm: "approve_reports", exclude: [uid], kind: "report_changed", title: `Report ${id} was edited by its owner`, body: `${STATUS_LABEL[o.prev_status] || o.prev_status} → Pending review${o.was_published ? " (unpublished)" : ""}`, link: "#/reports", ref: id, key: id + ":" + o.report.updated_at });
       const approvers = (await approverUids()).filter(x => x !== uid);
@@ -214,9 +214,7 @@ export default api(async (req, res) => {
     if (f.error) return res.status(400).json({ error: "invalid_file", message: f.error });
     const n = (await sb(`/report_evidence?report_id=eq.${id}&select=id`, { count: true })).total;
     if (n >= 10) return res.status(409).json({ error: "too_many", message: "A report can have at most 10 evidence files." });
-    const path = `${id}/${randomBytes(6).toString("hex")}.${f.ext}`;
-    await upload("report-evidence", path, f.buf, f.mime);
-    const e = (await sb("/report_evidence", { method: "POST", body: { report_id: id, path, mime: f.mime, size_bytes: f.buf.length, sha256: createHash("sha256").update(f.buf).digest("hex"), uploaded_by: actor(uid) }, prefer: "return=representation" }))[0];
+    const e = await storeEvidence(id, f, actor(uid)); // upload, then the row; rolled back if the row fails
     await audit(actor(uid), "report_evidence_added", { via: "portal", type: f.mime }, { target: id, req });
     return res.json({ ok: true, evidence: { id: e.id, mime: e.mime, size_bytes: e.size_bytes } });
   }
