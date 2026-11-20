@@ -28,8 +28,16 @@ createServer(async (req, res) => {
     const m = [...globalThis.__fake.tg.sent].reverse().find(x => x.chat_id === u.searchParams.get("uid") && /(Your code|sign-in code): <code>(\d{6})/.test(x.text));
     res.setHeader("content-type", "application/json"); return res.end(JSON.stringify({ code: m ? /<code>(\d{6})/.exec(m.text)[1] : null }));
   }
+  if (FAKE && path === "/__test/reset-limits") { // TEST DOUBLE ONLY: clear IP rate-limit counters between responsive UI scenarios
+    globalThis.__fake.T.rate_limits = []; globalThis.__fake.T.support_rate_limits = []; res.setHeader("content-type", "application/json"); return res.end('{"ok":true}');
+  }
   if (FAKE && path === "/__test/reset-quota") { // TEST DOUBLE ONLY: clear Human Support request quotas between UI scenarios
     globalThis.__fake.T.support_rate_limits = []; res.setHeader("content-type", "application/json"); return res.end('{"ok":true}');
+  }
+  if (FAKE && path.startsWith("/__fake-storage/")) { // TEST DOUBLE ONLY: serve objects of the in-memory Storage (public + signed URLs)
+    const m = /^\/__fake-storage\/object\/(?:public|sign)\/(.+)$/.exec(u.pathname), key = m ? "/object/" + m[1] : null, b = key && globalThis.__fake.storage.get(key);
+    if (!b) { res.statusCode = 404; return res.end(); }
+    res.setHeader("content-type", /\.png$/.test(key) ? "image/png" : /\.webp$/.test(key) ? "image/webp" : /\.pdf$/.test(key) ? "application/pdf" : "image/jpeg"); res.setHeader("cache-control", "max-age=300"); return res.end(b);
   }
   if (path.startsWith("/api/")) {
     const seg = path.split("/").filter(Boolean), key = seg[1];
@@ -37,7 +45,9 @@ createServer(async (req, res) => {
     let raw = ""; for await (const c of req) raw += c;
     const query = Object.fromEntries(u.searchParams); if (seg[2]) query.a = seg[2];
     const r2 = Object.assign(req, { query, body: raw ? (() => { try { return JSON.parse(raw); } catch { return raw; } })() : undefined });
-    const shim = Object.assign(res, { status(c) { res.statusCode = c; return shim; }, json(o) { if (!res.getHeader("content-type")) res.setHeader("content-type", "application/json"); res.end(JSON.stringify(o)); return shim; }, send(s) { res.end(typeof s === "string" ? s : JSON.stringify(s)); return shim; } });
+    // TEST DOUBLE ONLY: storage URLs of the fake Supabase are rewritten to the local /__fake-storage route
+    const out = o => { const t = JSON.stringify(o); return FAKE ? t.replaceAll("https://fake.supabase.co/storage/v1", `http://localhost:${PORT}/__fake-storage`) : t; };
+    const shim = Object.assign(res, { status(c) { res.statusCode = c; return shim; }, json(o) { if (!res.getHeader("content-type")) res.setHeader("content-type", "application/json"); res.end(out(o)); return shim; }, send(s) { res.end(typeof s === "string" ? s : JSON.stringify(s)); return shim; } });
     try { await (await handler(key))(r2, shim); } catch (e) { console.error(e); if (!res.headersSent) { res.statusCode = 500; res.end("{}"); } }
     return;
   }
