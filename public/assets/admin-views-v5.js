@@ -1,10 +1,8 @@
 "use strict";
-/* CHDS admin views (part 3, V5): Closed Cases, AI Knowledge Base (+ AI instructions, quick replies), Operations Analytics. */
 (()=>{
 const A=window.ADM,{$,$$,h,I,num,when,day,dur,ago,badge,api,errText,toast,loading,empty,errorBox,page,kpis,table,confirmAct,formDlg,chart,crumbs,has}=A;
 const V=A.views;
 
-/* ---------------- Closed Cases (view_closed_cases) ---------------- */
 V["closed-cases"]=async(el,[id])=>{
   if(id)return A.handoffDetail(el,id);
   const meta=await api("closed_cases_list?limit=1");if(!meta.ok){el.innerHTML=errorBox(errText(meta));$("[data-retry]",el).onclick=A.go;return}
@@ -16,7 +14,6 @@ V["closed-cases"]=async(el,[id])=>{
     emptyText:"No closed cases match these filters.",click:x=>location.hash="#/closed-cases/"+x.id});
 };
 
-/* ---------------- AI Knowledge Base (manage_knowledge_base) ---------------- */
 async function kbForm(e,reload){
   formDlg({title:e?`Edit “${e.title}”`:"New knowledge entry",intro:"The AI uses enabled entries when they are relevant to the customer's question. Write verified facts only. Entries that ask customers for passwords, codes, cookies or tokens are refused (Never-Ask-For-Password policy).",
     fields:[{n:"title",l:"Title / question",v:e?.title,req:true,ml:120},[{n:"category",l:"Category",v:e?.category||"general",ml:40,h:"lowercase, e.g. pricing, security, process"},{n:"sort_order",l:"Order",t:"number",min:0,max:100000,v:e?.sort_order??100}],
@@ -45,13 +42,11 @@ V.knowledge=async el=>{
       if(a==="del"){const c=await confirmAct({title:`Delete “${e.title}”?`,text:"The AI stops using it. The change is recorded in the audit log.",danger:true,confirm:"Delete"});if(c&&(await A.run("kb_delete",{id:e.id},"Entry deleted.")).ok)reload()}
     }});
   $("[data-newkb]",kbBox).onclick=()=>kbForm(null,L.reload);
-  // AI instructions
   const ins=$("[data-ins]",el);
   const loadIns=async()=>{const r=await api("ai_instructions_get");if(!r.ok){ins.innerHTML=errorBox(errText(r));return}
     ins.innerHTML=`<h3>${I("bot")} AI instructions</h3><p class="small">${h(r.j.note)}</p><form data-insf style="display:grid;gap:8px"><label for="ai_ins">Additional instructions for CHDS AI Support</label><textarea id="ai_ins" maxlength="3000" style="min-height:140px">${h(r.j.instructions)}</textarea><div class="ferr" role="alert"></div><button class="btn sm" type="submit" style="justify-self:start">Save instructions</button></form>`;
     $("[data-insf]",ins).addEventListener("submit",async e=>{e.preventDefault();const b=$("[type=submit]",ins);b.disabled=true;const x=await api("ai_instructions_save",{instructions:$("#ai_ins",ins).value});b.disabled=false;
       if(x.ok){toast("AI instructions saved.","ok");$(".ferr",ins).textContent=""}else $(".ferr",ins).textContent=errText(x)})};
-  // Quick replies
   const qb=$("[data-qr]",el);
   const loadQr=async()=>{const r=await api("quick_replies_list?all=1");if(!r.ok){qb.innerHTML=errorBox(errText(r));return}
     qb.innerHTML=`<h3>${I("message-plus")} Quick replies</h3><p class="small">Reusable Human Support answers for agents.</p><div class="acts" style="margin-bottom:10px"><button class="btn sm" type="button" data-newqr>${I("plus")} New quick reply</button></div>`+
@@ -62,7 +57,6 @@ V.knowledge=async el=>{
   await Promise.all([loadIns(),loadQr()]);
 };
 
-/* ---------------- Operations Analytics ---------------- */
 const PRESETS=[["today","Today"],["this_week","This week"],["this_month","This month"],["last_month","Last month"],["this_year","This year"],["last_year","Last year"],["all","All time"],["custom","Custom range"]];
 V["ops-analytics"]=async el=>{
   const st={preset:"this_month",from:"",to:"",basis:"activity"};

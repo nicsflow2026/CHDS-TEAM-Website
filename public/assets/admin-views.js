@@ -1,16 +1,12 @@
 "use strict";
-/* CHDS admin views (part 1): shared list component, Overview, People, Security & System, Profile. */
 (()=>{
 const A=window.ADM,{$,$$,h,I,money,moneyS,num,when,day,dur,ago,ini,badge,api,errText,toast,loading,empty,errorBox,page,kpis,table,pager,dlg,confirmAct,formDlg,chart,every,crumbs,has}=A;
 const V=A.views;
 const qs=o=>new URLSearchParams(Object.entries(o).filter(([,v])=>v!==""&&v!==undefined&&v!==null)).toString();
 const refreshBtn=`<button class="btn ghost sm" type="button" data-refresh>${I("refresh")} Refresh</button>`;
 
-/* Generic list: filters + table + pagination + row actions. Returns {reload}. */
 A.list=function(host,cfg){
   const st={offset:0,f:{...(cfg.defaults||{})}};let rows=[];
-  // A fresh root per render: listeners die with it. (Attaching them to the persistent #main made handlers from
-  // previously visited lists fire too — e.g. "Edit announcement" also opened a team member form and a session-revoke dialog.)
   host.innerHTML='<div class="lroot"></div>';const el=host.firstElementChild;
   el.innerHTML=page(cfg.title,cfg.icon,cfg.desc,(cfg.actions||"")+refreshBtn)+(cfg.top||"")+
     (cfg.filters&&cfg.filters.length?`<form class="bar" data-filters role="search">${cfg.filters.map(f=>`<div class="f${f.w?" wide":""}"><label for="flt_${f.n}">${h(f.l)}</label>${f.t==="select"?`<select id="flt_${f.n}" name="${f.n}">${f.o.map(([v,l])=>`<option value="${h(v)}"${String(st.f[f.n]??"")===String(v)?" selected":""}>${h(l)}</option>`).join("")}</select>`:`<input id="flt_${f.n}" name="${f.n}" type="${f.t||"search"}" value="${h(st.f[f.n]||"")}" ${f.t==="search"||!f.t?'placeholder="Search…" maxlength="60"':""}>`}</div>`).join("")}</form>`:"")+
@@ -21,7 +17,7 @@ A.list=function(host,cfg){
     const t=guard.next();box.setAttribute("aria-busy","true");
     if(!shown)box.innerHTML=UX.skeleton("table",6,{cols:Math.min(6,cfg.cols.length)});else box.classList.add("refreshing");
     const lim=cfg.limit||25,r=await api(cfg.op+"?"+qs({...st.f,offset:st.offset,limit:lim}));
-    if(!guard.is(t))return; // a newer filter/page request replaced this one: never render stale rows
+    if(!guard.is(t))return;
     box.removeAttribute("aria-busy");box.classList.remove("refreshing");shown=true;
     if(!r.ok){box.innerHTML=errorBox(errText(r));$("[data-retry]",box).onclick=load;return}
     rows=cfg.rows?cfg.rows(r.j):r.j.rows||[];
@@ -39,8 +35,6 @@ A.list=function(host,cfg){
   el.addEventListener("keydown",e=>{const tr=e.target.closest&&e.target.closest("tr.click");if(tr&&(e.key==="Enter"||e.key===" ")){e.preventDefault();cfg.click(rows[+tr.dataset.row],load)}});
   load();return{reload:load,state:st};
 };
-// Run an API action, toast the result. Returns the response.
-// A.run(op, body, okMsg, btn?) — with a button: loading state, duplicate clicks ignored, success/error flash.
 A.run=async(op,body,okMsg,btn)=>{
   if(btn&&btn.dataset.uxState==="loading")return{ok:false,status:0,j:{error:"busy"}};
   if(btn)UX.busy(btn,true,btn.dataset.busy||"Working…");
@@ -55,7 +49,6 @@ A.notes=(notes,op,idKey,id,reload)=>`<div class="card" style="margin-top:14px"><
 A.bindNote=(root,op,body,after)=>{const f=$("[data-note]",root);if(!f)return;f.addEventListener("submit",async e=>{e.preventDefault();const t=$("textarea",f).value.trim();if(!t)return;const r=await A.run(op,{...body,body:t},"Note added.");if(r.ok)after()})};
 const opts=(m,all)=>[["",all||"All"],...Object.entries(m)];
 
-/* ---------------- Overview ---------------- */
 V.overview=async el=>{
   const r=await api("overview");if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=A.go;return}
   const o=r.j,me=A.me();
@@ -74,7 +67,6 @@ V.overview=async el=>{
   $$("[data-x]",el).forEach(b=>b.onclick=async()=>{b.disabled=true;const x=await api(b.dataset.x,{});b.disabled=false;$("[data-xout]",el).textContent=x.ok?(x.j.ok?"✓ ":"✗ ")+(x.j.detail||(x.j.ok?"Telegram webhook, commands and bot name set.":x.j.error||"Failed")):errText(x)});
 };
 
-/* ---------------- User Management (staff) ---------------- */
 let PERMS=null;
 async function permCatalog(){if(PERMS)return PERMS;const r=await api("roles_list");PERMS=r.ok?r.j:{roles:[],permissions:[]};return PERMS}
 async function staffForm(u,reload){
@@ -123,7 +115,6 @@ V.users=async el=>{
   const n=$("[data-new]",el);if(n)n.onclick=()=>staffForm(null,L.reload);
 };
 
-/* ---------------- Team Management ---------------- */
 async function memberForm(m,reload){
   const all=(await api("team_options")).j.rows||[];
   formDlg({title:m?`Edit ${m.display_name}`:"Add team member",intro:"Public fields appear on the website only while the member is active and marked public. The Telegram UID is private: it is never shown publicly.",
@@ -136,7 +127,6 @@ async function memberForm(m,reload){
       [{n:"is_public",l:"Show on public website",t:"checkbox",v:m?m.is_public:true},{n:"show_telegram",l:"Show Telegram username publicly",t:"checkbox",v:m?m.show_telegram:true}]],
     onSubmit:async v=>{const r=await api("team_save",{...v,id:m?.id,display_order:Number(v.display_order)});if(r.ok){toast("Team member saved.","ok");reload();return true}return errText(r)}});
 }
-// Team member details: profile, linked dashboard accounts (role + permissions), team structure, report counts.
 async function memberDrawer(m0,reload){
   const r=await api("team_get?id="+encodeURIComponent(m0.id));if(!r.ok){toast(errText(r),"err");return}
   const {member:m,accounts,report_counts:rc,leads,leader,can_manage_access}=r.j;
@@ -172,7 +162,6 @@ V.team=el=>{
   $("[data-new]",el).onclick=()=>memberForm(null,()=>A.go());
 };
 
-/* ---------------- Roles & Permissions ---------------- */
 V.roles=async el=>{
   const load=async()=>{
     PERMS=null;const c=await permCatalog(),mine=A.me().perms;
@@ -190,14 +179,12 @@ V.roles=async el=>{
   await load();
 };
 
-/* ---------------- Session Manager ---------------- */
 V.sessions=el=>A.list(el,{title:"Session Manager",icon:"monitor-smartphone",desc:"Dashboard sessions with device, IP and activity. Revoking ends the session immediately and is recorded in the audit log.",op:"sessions_list",limit:50,defaults:{state:"active"},
   filters:[{n:"state",l:"State",t:"select",o:[["active","Active"],["ended","Ended / revoked"],["","All"]]},{n:"uid",l:"Telegram ID"}],
   cols:[{l:"Account",f:s=>`<b>${h(s.name)}</b><br><code>${h(s.uid)}</code>${s.current?' <span class="bd ok">this session</span>':""}`},{l:"Device",f:s=>h(s.device||"—")},{l:"IP",f:s=>h(s.ip||"")},{l:"Created",f:s=>when(s.created_at)},{l:"Last activity",f:s=>ago(s.last_seen_at)},
     {l:"State",f:s=>s.active?badge("active"):badge(s.revoke_reason?s.revoke_reason.replace(/_/g," "):"expired")},{l:"",f:s=>s.active?`<button class="btn danger sm" data-act="revoke">Revoke</button>`:""}],
   act:async(a,s,b,reload)=>{const c=await confirmAct({title:"Revoke this session?",text:`${h(s.name)} on ${h(s.device||"unknown device")} will be signed out.`,danger:true,confirm:"Revoke"});if(!c)return;const r=await A.run("session_revoke",{key:s.key},"Session revoked.");if(r.ok){if(r.j.self)location.reload();else reload()}}});
 
-/* ---------------- My profile ---------------- */
 V.profile=async el=>{
   const me=A.me(),s=await api("my_sessions");
   el.innerHTML=page("My profile","user",`${h(me.role_name)} · Telegram ID <code>${h(me.uid)}</code>`)+`<div class="grid g2"><div class="card"><h3>${I("user")} Display name</h3><form data-n style="display:grid;gap:8px"><label for="pn">Name</label><input id="pn" value="${h(me.name)}" maxlength="60"><button class="btn sm" style="justify-self:start" type="submit">Save name</button></form></div>
@@ -209,7 +196,6 @@ V.profile=async el=>{
     onSubmit:async v=>{const r=await api("profile_password",v);if(r.ok){toast("Password changed. Other sessions were signed out.","ok");return true}return r.status===428?"Password confirmation is required.":errText(r)}});
 };
 
-/* ---------------- Security Center ---------------- */
 V.security=async el=>{
   const r=await api("security_overview");if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=A.go;return}
   const {counts:c,events,locks,logins,config}=r.j;
@@ -223,12 +209,10 @@ V.security=async el=>{
   $$("[data-act=unlock]",el).forEach((b,i)=>b.onclick=async()=>{if((await A.run("security_unlock",{key:locks[i].key},"Lockout cleared.")).ok)A.go()});
 };
 
-/* ---------------- Audit Logs ---------------- */
 V.audit=el=>A.list(el,{title:"Audit Logs",icon:"scroll-text",desc:"Append-only record of sensitive actions. Entries cannot be edited or deleted through the platform.",op:"audit_list",limit:50,
   filters:[{n:"actor",l:"Actor"},{n:"action",l:"Action"},{n:"target",l:"Target"},{n:"from",l:"From",t:"date"},{n:"to",l:"To",t:"date"}],
   cols:[{l:"When",f:x=>when(x.at)},{l:"Actor",f:x=>`<code>${h(x.actor)}</code>`},{l:"Action",f:x=>`<b>${h(x.action.replace(/_/g," "))}</b>`},{l:"Target",f:x=>h(x.target||"")},{l:"Change",f:x=>x.prev||x.next?`<code>${h(JSON.stringify(x.prev||{}))}</code> → <code>${h(JSON.stringify(x.next||{}))}</code>`:"",c:"wide"},{l:"Details",f:x=>Object.keys(x.detail||{}).length?`<code>${h(JSON.stringify(x.detail))}</code>`:"",c:"wide"},{l:"IP",f:x=>h(x.ip||"")}]});
 
-/* ---------------- Emergency Control ---------------- */
 V.emergency=async el=>{
   const r=await api("emergency_get");if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=A.go;return}
   const {flags,labels,history}=r.j;
@@ -241,7 +225,6 @@ V.emergency=async el=>{
     if((await A.run("emergency_set",{flag:k,value:to,confirm:true,reason:c.reason},"Emergency setting updated.")).ok)A.go()});
 };
 
-/* ---------------- Backup & Recovery ---------------- */
 V.backups=async el=>{
   const r=await api("backups_list");if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=A.go;return}
   el.innerHTML=page("Backup & Recovery","archive","Full exports are written to the private <code>backups</code> storage bucket, downloaded back and checked (SHA-256 and row counts) before they are marked verified. Secrets such as sessions, one-time codes and password hashes are never included.",`<button class="btn sm" type="button" data-new>${I("archive")} Create backup</button>`)+
@@ -253,7 +236,6 @@ V.backups=async el=>{
   $$("[data-ex]",el).forEach(b=>b.onclick=()=>A.download("export_dataset",{dataset:b.dataset.ex}));
 };
 
-/* ---------------- System Health ---------------- */
 V.health=async el=>{
   const r=await api("health");if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=A.go;return}
   const x=r.j,ok=v=>v?badge("active").replace(">active<",">OK<"):badge("failed").replace(">failed<",">Problem<");
@@ -272,7 +254,6 @@ V.health=async el=>{
   $$("[data-x]",el).forEach(b=>b.onclick=async()=>{b.disabled=true;const y=await api(b.dataset.x,{});b.disabled=false;$("[data-xout]",el).textContent=y.ok?(y.j.ok?"✓ ":"✗ ")+(y.j.detail||(y.j.ok?"Telegram webhook, commands and name set.":y.j.error||"Failed")):errText(y)});
 };
 
-/* ---------------- System Settings ---------------- */
 V.settings=async el=>{
   const r=await api("settings_get");if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=A.go;return}
   const {support:s,site,env}=r.j;

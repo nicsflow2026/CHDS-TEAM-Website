@@ -1,6 +1,5 @@
 "use strict";
-/* Inline icon set (Lucide geometry, ISC licence: https://lucide.dev/license). No external requests.
-   Usage: CHDSIcon("bot") -> "<svg ...>" ; <i data-icon="bot"></i> placeholders are replaced by hydrateIcons(). */
+/*! Icon geometry from Lucide (https://lucide.dev), ISC License: https://lucide.dev/license */
 (()=>{
 const P={
 "layout-dashboard":'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',

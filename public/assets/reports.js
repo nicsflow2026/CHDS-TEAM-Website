@@ -1,9 +1,4 @@
 "use strict";
-/* Public report feed: reads /api/public/reports (published reports only, safe fields only, plus photos an
-   administrator explicitly approved for public display — served from the PUBLIC image bucket).
-   V6: photo carousel per card (scroll-snap, prev/next, swipe), lightbox (keyboard, swipe, focus returns),
-   lazy loading, fixed aspect ratios (no layout shift), loading placeholders and a broken-image fallback.
-   Live updates by polling every 30 s while the tab is visible. */
 (()=>{
 const $=s=>document.querySelector(s),I=n=>window.CHDSIcon(n),esc=UX.esc;
 const day=d=>d?new Date(d+"T00:00:00+08:00").toLocaleDateString("en-PH",{timeZone:"Asia/Manila",year:"numeric",month:"short",day:"numeric"}):"—";
@@ -13,7 +8,6 @@ let st={q:"",category:"",from:"",to:""},rows=[],total=0,version="",timer=0,ctrl=
 const qs=o=>new URLSearchParams(Object.entries(o).filter(([,v])=>v!==""&&v!==undefined)).toString();
 const safeUrl=u=>{try{const x=new URL(u);return x.protocol==="https:"||x.hostname==="localhost"||x.hostname==="127.0.0.1"?x.href:""}catch{return""}};
 
-/* ---------- photos ---------- */
 const photoAlt=(r,p,i,n)=>p.alt||`Photo ${i+1} of ${n} for “${r.title}”`;
 function gallery(r){
   const ph=(r.photos||[]).filter(p=>safeUrl(p.url));if(!ph.length)return"";
@@ -24,7 +18,6 @@ function gallery(r){
     ${n>1?`<button type="button" class="rnav prev" data-dir="-1" aria-label="Previous photo">${I("chevron-left")}</button><button type="button" class="rnav next" data-dir="1" aria-label="Next photo">${I("chevron-right")}</button><span class="rcount" aria-live="polite">1 / ${n}</span>`:""}
   </div>`;
 }
-// image loaded → remove the placeholder; failed → readable fallback instead of a broken icon
 function wireImages(root){
   root.querySelectorAll(".rph img,.lbx-img").forEach(im=>{
     const box=im.closest(".rph,.lbx-fig");
@@ -43,7 +36,6 @@ feed.addEventListener("click",e=>{
 feed.addEventListener("scroll",e=>{const tr=e.target;if(!tr.classList||!tr.classList.contains("rtrack"))return;const g=tr.closest(".rgal"),c=g.querySelector(".rcount");if(c)c.textContent=`${curIndex(g)+1} / ${tr.children.length}`},true);
 feed.addEventListener("keydown",e=>{const tr=e.target.closest&&e.target.closest(".rtrack");if(!tr)return;if(e.key==="ArrowRight"||e.key==="ArrowLeft"){e.preventDefault();const g=tr.closest(".rgal");slideTo(g,curIndex(g)+(e.key==="ArrowRight"?1:-1))}});
 
-/* ---------- lightbox ---------- */
 let lb=null;
 function lightbox(r,start,opener){
   const ph=r.photos.filter(p=>safeUrl(p.url)),n=ph.length;let i=start;
@@ -57,7 +49,7 @@ function lightbox(r,start,opener){
   const show=k=>{i=(k+n)%n;const p=ph[i];fig.className="lbx-fig ld";
     fig.innerHTML=`<img class="lbx-img" src="${esc(safeUrl(p.url))}" alt="${esc(photoAlt(r,p,i,n))}" decoding="async"${p.w&&p.h?` width="${+p.w}" height="${+p.h}"`:""}>`;
     cap.textContent=p.alt||r.title;cnt.textContent=n>1?`${i+1} / ${n}`:"";wireImages(lb);
-    if(n>1){const nx=new Image();nx.src=safeUrl(ph[(i+1)%n].url)}}; // preload the next photo
+    if(n>1){const nx=new Image();nx.src=safeUrl(ph[(i+1)%n].url)}};
   lb.addEventListener("click",e=>{if(e.target===lb||e.target.closest("[data-x]")){lb.close();return}const d=e.target.closest("[data-d]");if(d)show(i+Number(d.dataset.d))});
   lb.addEventListener("keydown",e=>{if(e.key==="ArrowRight"&&n>1)show(i+1);else if(e.key==="ArrowLeft"&&n>1)show(i-1)});
   let x0=null;lb.addEventListener("pointerdown",e=>{x0=e.clientX},{passive:true});
@@ -66,13 +58,12 @@ function lightbox(r,start,opener){
   document.documentElement.classList.add("lbx-open");show(i);lb.showModal();lb.querySelector("[data-x]").focus();
 }
 
-/* ---------- cards ---------- */
 const card=r=>`<article class="rcard${r.photos&&r.photos.length?" has-ph":""}">${gallery(r)}<div class="rbody"><span class="chip">${esc(r.category_label)}</span><h3>${esc(r.title)}</h3>${r.summary?`<p>${esc(r.summary)}</p>`:""}
   <div class="rmeta"><span>${I("calendar")} Activity: ${esc(day(r.activity_date))}</span><span>${I("circle-check")} Published ${esc(when(r.published_at))}</span><span>${I("user")} ${esc(r.member)}</span>${r.recovered?`<span>${I("shield-check")} ${esc(r.recovered)} recovered</span>`:""}</div></div></article>`;
 function render(){
   feed.removeAttribute("aria-busy");
   if(!rows.length){feed.innerHTML=`<div class="ux-state">${I("inbox")}<span>${st.q||st.category||st.from||st.to?"No published reports match these filters. Clear a filter to see more.":"No reports have been published yet."}</span></div>`;more.hidden=true;$("#cnt").textContent="";return}
-  feed.innerHTML=`<div class="rgrid">${rows.map(card).join("")}</div>`;wireImages(feed);
+  feed.innerHTML=`<div class="rgrid">${rows.map(card).join("")}</div>`;wireImages(feed);UX.reveal(feed,".rcard");
   $("#cnt").textContent=`${rows.length} of ${total} report${total===1?"":"s"}`;more.hidden=rows.length>=total;
 }
 async function fetchPage(offset){
@@ -83,18 +74,19 @@ async function fetchPage(offset){
 }
 function setLive(ok,msg){$("#lv").classList.toggle("off",!ok);$("#lvt").textContent=msg}
 const stamp=()=>"Live · updated "+new Date().toLocaleTimeString("en-PH",{timeZone:"Asia/Manila",hour:"numeric",minute:"2-digit"});
+const searchBox=()=>{const q=form.querySelector("[name=q]");return q&&q.parentElement};
 async function load(reset=true){
-  const t=guard.next();
+  const t=guard.next();searchBox()?.classList.add("ux-searching");
   if(reset){feed.setAttribute("aria-busy","true");feed.innerHTML=UX.skeleton("cards",6,{img:true});rows=[]}
   try{
-    const j=await fetchPage(reset?0:rows.length);if(!guard.is(t))return; // a newer search replaced this one
+    const j=await fetchPage(reset?0:rows.length);if(!guard.is(t))return;
     if(!catsLoaded&&j.categories){$("#fc").insertAdjacentHTML("beforeend",j.categories.map(([k,l])=>`<option value="${esc(k)}">${esc(l)}</option>`).join(""));catsLoaded=true}
+    searchBox()?.classList.remove("ux-searching");
     rows=reset?j.rows:[...rows,...j.rows.filter(x=>!rows.some(y=>y.id===x.id))];total=j.total;if(reset)version=j.version;render();setLive(true,stamp());
-  }catch(e){if(e.name==="AbortError"||!guard.is(t))return;console.warn("feed load failed",e);
+  }catch(e){if(e.name==="AbortError"||!guard.is(t))return;searchBox()?.classList.remove("ux-searching");console.warn("feed load failed",e);
     if(reset){feed.removeAttribute("aria-busy");feed.innerHTML=`<div class="ux-state err" role="alert">${I("alert-triangle")}<span>Reports could not be loaded. ${esc(e.message)}</span><button class="btn ghost sm" type="button" id="retry">${I("refresh")} Try again</button></div>`;$("#retry").onclick=()=>load(true)}
     setLive(false,"Offline · retrying");}
 }
-// poll: re-render only when the first page changed (the server version hash covers photos, publications and deletions)
 async function poll(){
   clearTimeout(timer);
   if(!document.hidden&&!lb){try{const j=await fetchPage(0);if(j.version!==version){version=j.version;total=j.total;

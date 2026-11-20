@@ -1,6 +1,4 @@
 "use strict";
-/* CHDS private report portal. Every rule here is mirrored and ENFORCED by /api/portal (ownership, status
-   eligibility, dates, permissions); the page only gives fast feedback. */
 (()=>{
 const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
 const I=n=>window.CHDSIcon(n);window.hydrateIcons();
@@ -22,7 +20,6 @@ async function api(path,body){
 const errText=r=>r.j&&r.j.message?r.j.message:{0:"Network error.",403:"Not allowed.",404:"Not found.",409:"This was changed meanwhile. Reload and try again.",423:"Temporarily disabled by an administrator.",429:"Too many requests. Please wait a moment."}[r.status]||"Something went wrong. Please try again.";
 const notice=(el,msg,kind)=>{el.className=kind==="ok"?"fok":"ferr";el.textContent=msg||""};
 
-/* ---------------- sign-in ---------------- */
 function showAuth(msg){$("#app").hidden=true;$("#lo").hidden=true;$("#auth").hidden=false;$("#ps1").hidden=false;$("#ps2").hidden=true;notice($("#perr"),msg||"");setTimeout(()=>$("#puid").focus(),30)}
 $("#ps1").addEventListener("submit",async e=>{e.preventDefault();uid=$("#puid").value.trim();
   if(!/^\d{1,20}$/.test(uid)){notice($("#perr"),"Enter your numeric Telegram user ID.");$("#puid").focus();return}
@@ -37,7 +34,6 @@ $("#ps2").addEventListener("submit",async e=>{e.preventDefault();const code=$("#
 $("#pback").onclick=()=>showAuth("");
 $("#lo").onclick=async()=>{await api("logout",{});ME=null;showAuth("You signed out.")};
 
-/* ---------------- tabs ---------------- */
 function tab(name){const n=name==="mine"?"mine":"new";
   $("#t-new").setAttribute("aria-selected",String(n==="new"));$("#t-mine").setAttribute("aria-selected",String(n==="mine"));
   $("#tab-new").hidden=n!=="new";$("#tab-mine").hidden=n!=="mine";if(location.hash!=="#"+n)history.replaceState(null,"","#"+n);
@@ -45,22 +41,25 @@ function tab(name){const n=name==="mine"?"mine":"new";
 $("#t-new").onclick=()=>tab("new");$("#t-mine").onclick=()=>tab("mine");
 $$("[role=tab]").forEach(t=>t.addEventListener("keydown",e=>{if(e.key==="ArrowRight"||e.key==="ArrowLeft"){const o=t.id==="t-new"?$("#t-mine"):$("#t-new");o.focus();o.click()}}));
 
-/* ---------------- report form (new + edit) ---------------- */
 const cats=()=>ME.categories;
 const maxDate=cat=>{const c=cats().find(x=>x.id===cat);return addDays(ME.today,c?c.future_days:0)};
 function formHTML(r,isEdit){
   const v=r||{},opt=cats().map(c=>`<option value="${esc(c.id)}"${(v.category||"account_recovery")===c.id?" selected":""}>${esc(c.label)}</option>`).join("");
   return`<form class="pform" id="rf" novalidate>
   ${isEdit&&(v.status==="approved"||v.published)?`<div class="feedback" role="note">${I("alert-triangle")} Editing this ${v.published?"published":"approved"} report sends it back to review${v.published?" and removes it from the public feed until it is approved and published again":""}.</div>`:""}
+  <fieldset class="psec"><legend><span>1</span>Report details</legend>
   <div><label for="r_title">Report title *</label><input id="r_title" name="title" maxlength="120" required value="${esc(v.title||"")}"></div>
   <div class="row2"><div><label for="r_cat">Report category *</label><select id="r_cat" name="category">${opt}</select></div>
-    <div><label for="r_date">Activity date *</label><input id="r_date" name="report_date" type="date" min="2020-01-01" required value="${esc(v.activity_date||ME.today)}"><div class="hint" id="r_date_h"></div></div></div>
+    <div><label for="r_date">Activity date *</label><input id="r_date" name="report_date" type="date" min="2020-01-01" required value="${esc(v.activity_date||ME.today)}"><div class="hint" id="r_date_h"></div></div></div></fieldset>
+  <fieldset class="psec"><legend><span>2</span>What happened</legend>
   <div><label for="r_desc">Report description *</label><textarea id="r_desc" name="description" maxlength="4000" required>${esc(v.description||"")}</textarea><div class="hint">What happened and what was done (at least 10 characters).</div></div>
-  <div><label for="r_acc">Relevant account or case information</label><textarea id="r_acc" name="account_info" maxlength="2000">${esc(v.account_info||"")}</textarea><div class="hint">Private: only you and authorized CHDS staff can see it. Never include passwords, login codes or cookies.</div></div>
+  <div><label for="r_acc">Relevant account or case information</label><textarea id="r_acc" name="account_info" maxlength="2000">${esc(v.account_info||"")}</textarea><div class="hint">Private: only you and authorized CHDS staff can see it. Never include passwords, login codes or cookies.</div></div></fieldset>
+  <fieldset class="psec"><legend><span>3</span>Results</legend>
   <div class="row2"><div><label for="r_rec">Recovered accounts</label><input id="r_rec" name="recovered" type="number" min="0" max="9999" step="1" value="${esc(v.recovered??0)}"></div>
-    <div><label for="r_rev">Earnings (PHP)</label><input id="r_rev" name="revenue" type="number" min="0" max="10000000" step="0.01" value="${esc(v.revenue??0)}"></div></div>
+    <div><label for="r_rev">Earnings (PHP)</label><input id="r_rev" name="revenue" type="number" min="0" max="10000000" step="0.01" value="${esc(v.revenue??0)}"></div></div></fieldset>
+  <fieldset class="psec"><legend><span>4</span>More information${isEdit?"":" and evidence"}</legend>
   <div><label for="r_add">Additional information</label><textarea id="r_add" name="additional_info" maxlength="2000">${esc(v.additional_info||"")}</textarea></div>
-  ${isEdit?"":`<div><label for="r_ev">Supporting evidence (optional)</label><input id="r_ev" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" aria-describedby="r_ev_h"><div class="hint" id="r_ev_h">Up to ${MAXF} files: JPG, PNG, WebP or PDF, 3 MB each. Stored privately; an administrator decides if a photo is ever shown publicly.</div><div class="upl" id="upl" aria-live="polite"></div></div>`}
+  ${isEdit?"":`<div><label for="r_ev">Supporting evidence (optional)</label><input id="r_ev" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" aria-describedby="r_ev_h"><div class="hint" id="r_ev_h">Up to ${MAXF} files: JPG, PNG, WebP or PDF, 3 MB each. Stored privately; an administrator decides if a photo is ever shown publicly.</div><div class="upl" id="upl" aria-live="polite"></div></div>`}</fieldset>
   <label style="display:flex;gap:10px;align-items:flex-start;font-size:14px;color:var(--ink2)"><input type="checkbox" id="r_ok" style="width:auto;min-height:0;margin-top:4px"> <span>I confirm this information is accurate and I did not include passwords, one-time codes or other credentials.</span></label>
   <div class="ferr" id="rf_err" role="alert"></div>
   <div class="acts"><button class="btn" type="submit">${isEdit?"Save changes":"Submit report"}</button>${isEdit?`<button class="btn ghost" type="button" data-cancel>Cancel</button>`:""}</div></form>`;
@@ -70,7 +69,6 @@ function bindDate(f){const c=$("#r_cat",f),d=$("#r_date",f),h=$("#r_date_h",f);
 function readForm(f){const o={};for(const el of $$("input[name],select[name],textarea[name]",f))o[el.name]=el.value.trim();return o}
 function check(o){
   $$(".fld-err",$("#rf").parentElement).forEach(x=>x.classList.remove("fld-err"));
-  // mark only the field's own wrapper (the confirmation checkbox sits in a <label>, not a field <div>)
   const bad=(id,msg)=>{const el=$("#"+id),w=el.type==="checkbox"?el.closest("label"):el.closest("div");if(w)w.classList.add("fld-err");el.focus();return msg};
   if([...o.title].length<3)return bad("r_title","Title must be at least 3 characters.");
   if([...o.description].length<10)return bad("r_desc","Description must be at least 10 characters.");
@@ -87,9 +85,6 @@ function readFile(file){return new Promise((res,rej)=>{
   const u=URL.createObjectURL(file),im=new Image();
   im.onload=()=>{const k=Math.min(1,1600/Math.max(im.width,im.height)),c=document.createElement("canvas");c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext("2d").drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);const out=c.toDataURL("image/jpeg",.85);out.length*.75>3*1048576?rej(new Error("Image is still too large after compression.")):res(out)};
   im.onerror=()=>{URL.revokeObjectURL(u);rej(new Error("Image could not be read."))};im.src=u})}
-/* ---------------- evidence uploader (V6): previews, per-file progress, retry, remove ----------------
-   A file is shown as uploaded only after /api/portal/evidence_add answered 200, i.e. after Supabase Storage
-   accepted it AND the database row was written. */
 const MAXF=10,TYPES=/^(image\/(jpeg|png|webp)|application\/pdf)$/;
 const kb=n=>n<1048576?Math.max(1,Math.round(n/1024))+" KB":(n/1048576).toFixed(1)+" MB";
 function uploader(host,{onChange}={}){
@@ -146,7 +141,6 @@ function newForm(){
     $("#okb").focus();$("#go-mine").onclick=()=>tab("mine");$("#go-new").onclick=newForm;UX.announce(`Report ${rep.id} submitted`);});
 }
 
-/* ---------------- My reports ---------------- */
 const mine={st:{q:"",status:"",basis:"activity",from:"",to:"",archived:""},rows:[],total:0,
   init(){const box=$("#tab-mine");box.innerHTML=`<form class="fbar" id="mf" role="search" aria-label="Filter my reports" style="grid-template-columns:minmax(0,2fr) repeat(5,minmax(0,1fr))">
     <div class="wide"><label for="m_q">Search</label><input id="m_q" name="q" type="search" maxlength="60" placeholder="ID, title or description"></div>
@@ -170,7 +164,6 @@ const mine={st:{q:"",status:"",basis:"activity",from:"",to:"",archived:""},rows:
     $$(".pitem",box).forEach(b=>b.onclick=()=>detail(this.rows[+b.dataset.i].id,b));}
 };
 
-/* ---------------- dialogs ---------------- */
 function dlg(html,label,back){const d=document.createElement("div");d.className="pdlg";d.innerHTML=`<div role="dialog" aria-modal="true" aria-label="${esc(label)}" tabindex="-1">${html}</div>`;document.body.appendChild(d);
   const close=()=>{d.remove();document.removeEventListener("keydown",key);back&&back.focus&&back.focus()},key=e=>{if(e.key==="Escape")close()};
   document.addEventListener("keydown",key);d.addEventListener("click",e=>{if(e.target===d)close()});setTimeout(()=>$("[role=dialog]",d).focus(),20);return{d,close}}
@@ -214,7 +207,6 @@ async function detail(id,back){
     dup.add(list,er);const s0=await dup.uploadAll(id);if(s0.failed===0){UX.announce("Evidence uploaded");re()}};
 }
 
-/* ---------------- boot ---------------- */
 async function boot(){
   const r=await api("me");
   if(!r.ok){if(r.status===401||r.status===403)return showAuth("");$("#auth").hidden=false;notice($("#perr"),errText(r));return}

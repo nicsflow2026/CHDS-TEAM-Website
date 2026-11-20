@@ -1,6 +1,4 @@
 "use strict";
-/* CHDS admin dashboard — core (API client, UI kit, router, auth). Views live in admin-views.js.
-   Every permission is enforced by the API; this file only hides what the API would refuse anyway. */
 window.ADM=(()=>{
 const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
 const h=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -24,11 +22,9 @@ const badge=s=>`<span class="bd ${BD[s]??""}">${h(LABEL[s]||String(s||"—").rep
 
 let ME=null,route="",timers=[],globalTimers=[],idleMs=600000,last=Date.now(),pingAt=0,badgeN=0,lastWaiting=null;
 
-/* ---------------- API ---------------- */
 async function api(op,body,o={}){
   const opt={credentials:"same-origin",cache:"no-store",headers:{}};
   if(body!==undefined){opt.method="POST";opt.headers["Content-Type"]="application/json";opt.headers["X-CHDS-Admin"]="1";opt.body=JSON.stringify(body)}
-  // V6: every request has a timeout (no endless spinner). Destructive operations are never retried automatically.
   const ctl=new AbortController(),tmo=setTimeout(()=>ctl.abort(),o.timeout||(body!==undefined?60000:30000));opt.signal=ctl.signal;
   let r;try{r=await fetch("/api/admin/"+op,opt)}catch{clearTimeout(tmo);return{ok:false,status:0,j:ctl.signal.aborted?{error:"timeout",message:"The request timed out. It may still complete on the server — refresh before trying again."}:{error:"network",message:"Network error. Check your connection."}}}
   clearTimeout(tmo);
@@ -45,26 +41,22 @@ async function download(op,params){
   a.href=URL.createObjectURL(b);a.download=m?m[1]:"export.csv";document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);toast("Export downloaded.","ok");
 }
 
-/* ---------------- UI kit ---------------- */
 function toast(msg,kind="info"){const d=document.createElement("div");d.className="toast "+kind;d.setAttribute("role",kind==="err"?"alert":"status");d.innerHTML=I(kind==="ok"?"circle-check":kind==="err"?"alert-triangle":"info")+`<span>${h(msg)}</span>`;$("#toasts").appendChild(d);setTimeout(()=>d.remove(),kind==="err"?7000:4000)}
 const loading=(n=4,kind)=>kind?UX.skeleton(kind,n):`<div aria-busy="true" aria-label="Loading">${UX.skeleton("kpis",4)}<div style="height:14px"></div>${UX.skeleton("table",5,{cols:5})}</div>`;
 const empty=(t,icon="inbox")=>`<div class="state">${I(icon)}<span>${h(t)}</span></div>`;
 const errorBox=(t)=>`<div class="state err" role="alert">${I("alert-triangle")}<span>${h(t)}</span><button class="btn ghost sm" type="button" data-retry>${I("refresh")} Try again</button></div>`;
 function page(title,icon,desc,actions=""){return`<div class="phd"><div><h1>${I(icon)} ${h(title)}</h1>${desc?`<p>${desc}</p>`:""}</div><div class="acts">${actions}</div></div>`}
 function kpis(list){return`<div class="kpis">${list.filter(Boolean).map(k=>`<div class="kpi"><span>${I(k.i||"activity")} ${h(k.l)}</span><b>${k.v}</b>${k.s?`<small>${k.s}</small>`:""}</div>`).join("")}</div>`}
-// cols: [{l:label, f:row=>html, c:"num"|"wide"}]
 function table(cols,rows,{click,emptyText="No records match these filters."}={}){
   if(!rows||!rows.length)return`<div class="tw">${empty(emptyText)}</div>`;
-  // data-row is ALWAYS set: row-action buttons (Edit/Delete/Revoke/Publish…) resolve their record through it, also in lists without row click.
   return`<div class="tw"><table class="rt"><thead><tr>${cols.map(c=>`<th class="${c.c||""}" scope="col">${h(c.l)}</th>`).join("")}</tr></thead><tbody>${rows.map((r,i)=>`<tr data-row="${i}"${click?` class="click" tabindex="0"`:""}>${cols.map(c=>`<td class="${c.c||""}" data-label="${h(c.l)}">${c.f(r)??""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 function pager(total,offset,limit){if(total<=limit&&!offset)return"";const a=offset+1,b=Math.min(total,offset+limit);
   return`<div class="pager"><span>${num(a)}–${num(b)} of ${num(total)}</span><button class="btn ghost sm" type="button" data-pg="${Math.max(0,offset-limit)}" ${offset?"":"disabled"} aria-label="Previous page">${I("chevron-left")}</button><button class="btn ghost sm" type="button" data-pg="${offset+limit}" ${b<total?"":"disabled"} aria-label="Next page">${I("chevron-right")}</button></div>`}
 function dlg(html,{drawer=false,label="Dialog"}={}){
   const d=document.createElement("dialog");if(drawer)d.className="drawer";d.setAttribute("aria-label",label);d.innerHTML=html;document.body.appendChild(d);
-  d.addEventListener("close",()=>d.remove());d.addEventListener("click",e=>{if(e.target===d)d.close()});d.showModal();return d;
+  d.addEventListener("close",()=>setTimeout(()=>d.remove(),UX.reduced()?0:280));d.addEventListener("click",e=>{if(e.target===d)d.close()});d.showModal();return d;
 }
-// Confirmation with optional required reason. Resolves {reason} or null.
 function confirmAct({title,text,confirm="Confirm",danger=false,reason=false,reasonLabel="Reason",typed=null}){
   return new Promise(res=>{
     const d=dlg(`<form method="dialog" novalidate><h2>${h(title)}</h2><p class="small" style="font-size:13.5px">${text||""}</p>
@@ -81,7 +73,6 @@ function confirmAct({title,text,confirm="Confirm",danger=false,reason=false,reas
     setTimeout(()=>{const f=$("textarea,input",d)||$("[type=submit]",d);f&&f.focus()},30);
   });
 }
-// fields: [{n,l,t:"text|number|date|datetime-local|select|textarea|checkbox|password|file|perms|multiselect",o:[[v,label]],v,req,h,min,max,step,ml,accept,wide}]
 function field(f){
   const id="f_"+f.n,req=f.req?" required":"",v=f.v??"";
   let inp;
@@ -107,7 +98,7 @@ function formDlg({title,fields,submit="Save",intro="",onSubmit,drawer=false}){
       else vals[f.n]=el.value.trim();
       if(f.req&&f.t!=="checkbox"&&!vals[f.n]){er.textContent=`${f.l} is required.`;el.focus();return}
     }
-    const b=$("[type=submit]",d);if(b.dataset.uxState==="loading")return; // duplicate submission
+    const b=$("[type=submit]",d);if(b.dataset.uxState==="loading")return;
     UX.busy(b,true,submit==="Save"?"Saving…":submit+"…");$("[data-c]",d).disabled=true;
     let out;try{out=await onSubmit(vals)}catch(x){console.error(x);out="Something went wrong. Please try again."}
     finally{UX.busy(b,false);const c=$("[data-c]",d);if(c)c.disabled=false}
@@ -116,7 +107,6 @@ function formDlg({title,fields,submit="Save",intro="",onSubmit,drawer=false}){
   setTimeout(()=>{const f=$("input:not([type=checkbox]),select,textarea",d);f&&f.focus()},30);
   return d;
 }
-// Files: images are resized/re-encoded in the browser; PDFs are sent as-is. The server re-validates the bytes.
 function readFile(file,f){return new Promise((res,rej)=>{
   const max=f.maxBytes||3*1048576;
   if(file.type==="application/pdf"){if(file.size>max)return rej(new Error("PDF is larger than "+Math.round(max/1048576)+" MB."));const r=new FileReader();r.onload=()=>res(r.result);r.onerror=()=>rej(new Error("File could not be read."));r.readAsDataURL(file);return}
@@ -138,7 +128,6 @@ function reauth(){return new Promise(res=>{
   setTimeout(()=>$("#ra",d).focus(),30);
 })}
 
-/* ---------------- charts (SVG, no libraries) ---------------- */
 const COLORS=["#3B82F6","#22C55E","#F59E0B","#38BDF8","#A78BFA","#EF4444"];
 function chart({labels,series,type="bar",fmt=num,height=240,title="Chart"}){
   if(!labels.length)return empty("No data for this period.","bar-chart");
@@ -150,14 +139,13 @@ function chart({labels,series,type="bar",fmt=num,height=240,title="Chart"}){
   const xl=labels.map((l,i)=>i%step===0||i===n-1?`<text x="${type==="bar"?L+(i+.5)*(W-L-R)/n:X(i)}" y="${H-10}" text-anchor="middle" fill="#A5B4C7" font-size="11">${h(l)}</text>`:"").join("");
   let body="";
   series.forEach((s,si)=>{const c=s.color||COLORS[si%COLORS.length];
-    if(type==="bar")s.values.forEach((v,i)=>{const cx=L+(i+.5)*(W-L-R)/n,x=cx-bw*series.length/2+si*bw,y=Y(Number(v)||0);body+=`<rect x="${x}" y="${y}" width="${bw-1}" height="${Math.max(0,H-B-y)}" rx="2" fill="${c}"><title>${h(labels[i])} · ${h(s.name)}: ${h(fmt(v))}</title></rect>`});
-    else{const pts=s.values.map((v,i)=>`${X(i)},${Y(Number(v)||0)}`).join(" ");body+=`<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2.5" stroke-linejoin="round"/>`+s.values.map((v,i)=>`<circle cx="${X(i)}" cy="${Y(Number(v)||0)}" r="3" fill="${c}"><title>${h(labels[i])} · ${h(s.name)}: ${h(fmt(v))}</title></circle>`).join("")}});
+    if(type==="bar")s.values.forEach((v,i)=>{const cx=L+(i+.5)*(W-L-R)/n,x=cx-bw*series.length/2+si*bw,y=Y(Number(v)||0);body+=`<rect class="bar" style="--i:${i}" x="${x}" y="${y}" width="${bw-1}" height="${Math.max(0,H-B-y)}" rx="2" fill="${c}"><title>${h(labels[i])} · ${h(s.name)}: ${h(fmt(v))}</title></rect>`});
+    else{const pts=s.values.map((v,i)=>`${X(i)},${Y(Number(v)||0)}`).join(" ");body+=`<polyline class="ln" pathLength="1" points="${pts}" fill="none" stroke="${c}" stroke-width="2.5" stroke-linejoin="round"/>`+s.values.map((v,i)=>`<circle class="dot" cx="${X(i)}" cy="${Y(Number(v)||0)}" r="3" fill="${c}"><title>${h(labels[i])} · ${h(s.name)}: ${h(fmt(v))}</title></circle>`).join("")}});
   const legend=series.length>1?`<div class="legend">${series.map((s,i)=>`<span><i style="background:${s.color||COLORS[i%COLORS.length]}"></i>${h(s.name)}</span>`).join("")}</div>`:"";
   const data=`<details class="data"><summary>Show data table</summary><div class="tw" style="margin-top:6px"><table><thead><tr><th>Period</th>${series.map(s=>`<th class="num">${h(s.name)}</th>`).join("")}</tr></thead><tbody>${labels.map((l,i)=>`<tr><td>${h(l)}</td>${series.map(s=>`<td class="num">${h(fmt(s.values[i]))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
   return`<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${h(title)}">${g}${body}${xl}</svg>${legend}${data}</div>`;
 }
 
-/* ---------------- navigation & router ---------------- */
 const NAV=[
   ["", [["overview","Overview","layout-dashboard",null]]],
   ["People",[["users","User Management","users","manage_users"],["team","Team Management","user-plus","manage_team"],["roles","Roles & Permissions","key-round","manage_roles"],["sessions","Session Manager","monitor-smartphone","manage_security"]]],
@@ -173,7 +161,7 @@ function crumbs(extra){const t=titleOf(route)||{label:route};$("#crumbs").innerH
 function every(fn,ms){const id=setInterval(()=>{if(!document.hidden)fn()},ms);timers.push(id);return id}
 async function go(){
   timers.forEach(clearInterval);timers=[];
-  document.querySelectorAll("dialog[open]").forEach(d=>d.close()); // a page change (link, Back button, notification link) never leaves a dialog of the old page on top
+  document.querySelectorAll("dialog[open]").forEach(d=>d.close());
   const [id,...rest]=(location.hash.replace(/^#\/?/,"")||"overview").split("/");
   const t=titleOf(id);route=t&&can(t.perm)?id:"overview";
   $$("#snav a").forEach(a=>{const on=a.dataset.nav===route;a.classList.toggle("on",on);on?a.setAttribute("aria-current","page"):a.removeAttribute("aria-current")});
@@ -182,16 +170,15 @@ async function go(){
   const v=window.ADM.views[route];
   try{await v(el,rest.map(decodeURIComponent))}catch(e){console.error(e);el.innerHTML=errorBox("This page failed to load.");$("[data-retry]",el).onclick=go}
   finally{UX.bar.done()}
+  UX.enter(el);UX.reveal(el,".card");
   el.focus({preventScroll:true});
 }
 addEventListener("hashchange",go);
-const openSide=()=>{$("#side").classList.add("open");$("#scrim").hidden=false;$("#sopen").setAttribute("aria-expanded","true")},closeSide=()=>{$("#side").classList.remove("open");$("#scrim").hidden=true;$("#sopen").setAttribute("aria-expanded","false")};
+const openSide=()=>{$("#side").classList.add("open");$("#scrim").hidden=false;UX.lockScroll("side",true);$("#sopen").setAttribute("aria-expanded","true")},closeSide=()=>{$("#side").classList.remove("open");$("#scrim").hidden=true;UX.lockScroll("side",false);$("#sopen").setAttribute("aria-expanded","false")};
 
-/* ---------------- auth ---------------- */
 let uid="";
 const lerr=t=>{$("#lerr").textContent=t||""};
 const setTitle=()=>{document.title=(badgeN?`(${badgeN}) `:"")+(titleOf(route)?.label||"Dashboard")+" · CHDS Admin"};
-// Dashboard notifications: sidebar counters, bell indicator, title count, toast on new waiting requests.
 async function badges(){
   const r=await api("badges?quiet=1");if(!r.ok)return;const b=r.j;
   $$("[data-cnt]").forEach(el=>{const v=b[el.dataset.cnt]||0;el.hidden=!v;el.textContent=v>99?"99+":String(v);el.setAttribute("aria-label",v+" pending")});
@@ -200,11 +187,13 @@ async function badges(){
   if(lastWaiting!==null&&(b.handoffs||0)>lastWaiting)toast(`New Human Support request waiting (${b.handoffs} in queue).`,"info");
   lastWaiting=b.handoffs===undefined?null:b.handoffs;badgeN=(b.handoffs||0)+(b.reports||0);setTitle();
 }
-function lock(){timers.forEach(clearInterval);timers=[];globalTimers.forEach(clearInterval);globalTimers=[];ME=null;lastWaiting=null;badgeN=0;$("#app").hidden=true;$("#login").hidden=false;$("#s1").hidden=false;$("#s2").hidden=true;lerr("");$$("dialog").forEach(d=>d.close())}
+const loginStep=n=>{$("#pw").type="password";$("#pwt").setAttribute("aria-pressed","false");$("#pwt").setAttribute("aria-label","Show password");$("#pwt").innerHTML=I("eye");$("#s1").hidden=n!==1;$("#s2").hidden=n!==2;$$(".lsteps span").forEach((x,i)=>x.classList.toggle("on",i<n));$("#lcard").classList.remove("ok");$("#login").classList.remove("leaving")};
+const loginError=m=>{lerr(m);UX.enter($("#lcard"),"shake")};
+function lock(){timers.forEach(clearInterval);timers=[];globalTimers.forEach(clearInterval);globalTimers=[];ME=null;lastWaiting=null;badgeN=0;$("#app").hidden=true;$("#login").hidden=false;loginStep(1);lerr("");$$("dialog").forEach(d=>d.close());UX.lockScroll("side",false)}
 async function enter(){
   const r=await api("me");if(!r.ok){lock();return}
   ME=r.j;idleMs=ME.idle_ms||idleMs;last=Date.now();
-  $("#login").hidden=true;$("#app").hidden=false;
+  $("#login").hidden=true;$("#app").hidden=false;UX.enter($("#app"));
   $("#snav").innerHTML=navHTML();$("#mename").textContent=ME.name;$("#merole").textContent=ME.role_name;$("#mav").textContent=ini(ME.name);
   flagbar(ME.flags);go();badges();
   globalTimers.push(setInterval(async()=>{if(document.hidden)return;const x=await api("me?quiet=1");if(x.ok){ME=x.j;flagbar(ME.flags)}},60000));
@@ -212,22 +201,25 @@ async function enter(){
 }
 function flagbar(f){const on=f?Object.entries(f).filter(([,v])=>v).map(([k])=>k.replace(/_/g," ")):[];const b=$("#flagbar");b.hidden=!on.length;b.innerHTML=on.length?I("siren")+`<span><b>Emergency Control active:</b> ${h(on.join(", "))}.${has("manage_system")?` <a href="#/emergency">Review</a>`:""}</span>`:""}
 $("#s1").addEventListener("submit",async e=>{e.preventDefault();lerr("");uid=$("#uid").value.trim();
-  if(!/^\d{1,20}$/.test(uid)){lerr("Enter your numeric Telegram user ID.");return}
-  const b=$("#s1 button");b.disabled=true;const r=await api("login",{uid,password:$("#pw").value});$("#pw").value="";b.disabled=false;
-  if(r.ok){$("#s1").hidden=true;$("#s2").hidden=false;$("#code").focus();return}
-  lerr(r.status===429?(r.j.retry_after?`Too many failed attempts. Try again in ${Math.ceil(r.j.retry_after/60)} minute(s).`:"Too many attempts. Try again in 15 minutes."):r.status===503?(r.j.error==="db_not_migrated"?"Database is not migrated: run supabase.sql (see docs/DEPLOYMENT.md).":"Sign-in is not configured or temporarily unavailable."):r.status===502?"Could not send the code. Open the bot in Telegram, press /start, then try again.":"Something went wrong. Please try again.")});
-$("#s2").addEventListener("submit",async e=>{e.preventDefault();lerr("");const b=$("#s2 button");b.disabled=true;
-  const r=await api("otp",{uid,code:$("#code").value.trim()});$("#code").value="";b.disabled=false;
-  if(r.ok){await enter();return}
-  lerr(r.status===429?`Too many attempts. Try again in ${Math.ceil((r.j.retry_after||900)/60)} minute(s).`:"Invalid or expired code. Start over to get a new one.");if(r.status!==429){$("#s2").hidden=true;$("#s1").hidden=false}});
-$("#back").onclick=()=>{$("#s2").hidden=true;$("#s1").hidden=false;lerr("")};
+  if(!/^\d{1,20}$/.test(uid)){loginError("Enter your numeric Telegram user ID.");$("#uid").setAttribute("aria-invalid","true");$("#uid").focus();return}
+  $("#uid").removeAttribute("aria-invalid");
+  const b=$("#s1 [type=submit]");if(b.dataset.uxState==="loading")return;UX.busy(b,true,"Checking…");const r=await api("login",{uid,password:$("#pw").value});$("#pw").value="";UX.busy(b,false);
+  if(r.ok){loginStep(2);$("#code").focus();return}
+  loginError(r.status===429?(r.j.retry_after?`Too many failed attempts. Try again in ${Math.ceil(r.j.retry_after/60)} minute(s).`:"Too many attempts. Try again in 15 minutes."):r.status===503?(r.j.error==="db_not_migrated"?"Database is not migrated: run supabase.sql (see docs/DEPLOYMENT.md).":"Sign-in is not configured or temporarily unavailable."):r.status===502?"Could not send the code. Open the bot in Telegram, press /start, then try again.":"Something went wrong. Please try again.")});
+$("#s2").addEventListener("submit",async e=>{e.preventDefault();lerr("");const b=$("#s2 [type=submit]");if(b.dataset.uxState==="loading")return;UX.busy(b,true,"Signing in…");
+  const r=await api("otp",{uid,code:$("#code").value.trim()});$("#code").value="";UX.busy(b,false);
+  if(r.ok){$("#lcard").classList.add("ok");UX.announce("Signed in");if(!UX.reduced()){$("#login").classList.add("leaving");await new Promise(t=>setTimeout(t,320))}await enter();return}
+  loginError(r.status===429?`Too many attempts. Try again in ${Math.ceil((r.j.retry_after||900)/60)} minute(s).`:"Invalid or expired code. Start over to get a new one.");if(r.status!==429)loginStep(1)});
+$("#back").onclick=()=>{loginStep(1);lerr("");$("#uid").focus()};
+$("#pwt").innerHTML=I("eye");
+$("#pwt").onclick=()=>{const p=$("#pw"),show=p.type==="password";p.type=show?"text":"password";$("#pwt").innerHTML=I(show?"eye-off":"eye");$("#pwt").setAttribute("aria-pressed",String(show));$("#pwt").setAttribute("aria-label",show?"Hide password":"Show password");p.focus()};
+window.hydrateIcons&&window.hydrateIcons($("#login"));
 $("#out").onclick=async()=>{await api("logout",{});lock()};
 $("#outall").onclick=async()=>{const c=await confirmAct({title:"Sign out everywhere?",text:"All of your dashboard sessions on every device will end.",confirm:"Sign out everywhere",danger:true});if(c){await api("logout",{all:true});lock()}};
 $("#mebtn").onclick=e=>{e.stopPropagation();const m=$("#memenu");m.hidden=!m.hidden;$("#mebtn").setAttribute("aria-expanded",String(!m.hidden))};
 document.addEventListener("click",()=>{$("#memenu").hidden=true;$("#mebtn").setAttribute("aria-expanded","false")});
 $("#sopen").innerHTML=I("menu");$("#sclose").innerHTML=I("x");$("#bell").innerHTML=I("bell");$("#site").innerHTML=I("external-link");
 $("#sopen").onclick=openSide;$("#sclose").onclick=closeSide;$("#scrim").onclick=closeSide;
-// Notification center: own notifications (unread first, mark read) + current announcements.
 $("#bell").onclick=async()=>{
   const [n,a]=await Promise.all([api("notif_list?limit=40"),api("my_announcements")]);
   if(!n.ok){toast(errText(n),"err");return}
@@ -246,7 +238,6 @@ const bump=()=>{last=Date.now();if(ME&&Date.now()-pingAt>60000){pingAt=Date.now(
 ["pointerdown","keydown","touchstart","scroll"].forEach(ev=>addEventListener(ev,bump,{passive:true}));
 setInterval(async()=>{if(ME&&Date.now()-last>idleMs){await api("logout",{});lock();lerr("Signed out after "+Math.round(idleMs/6e4)+" minutes of inactivity.")}},10000);
 addEventListener("keydown",e=>{if(e.key==="Escape")closeSide()});
-// boot: valid session cookie → straight to the dashboard
 (async()=>{const r=await fetch("/api/admin/me",{credentials:"same-origin",cache:"no-store"}).catch(e=>{console.warn("Session check failed",e);return null});if(r&&r.ok)enter();else lock()})();
 
 return{badges,$,$$,h,I,money,moneyS,num,when,day,dur,ago,ini,badge,phToday,api,errText,download,toast,loading,empty,errorBox,page,kpis,table,pager,dlg,confirmAct,formDlg,chart,every,crumbs,has,go,me:()=>ME,views:{}};

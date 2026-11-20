@@ -1,5 +1,4 @@
 "use strict";
-/* CHDS admin views (part 2): AI Support, Human Support, Reports, Revenue, Analytics, Performance, Announcements. */
 (()=>{
 const A=window.ADM,{$,$$,h,I,money,moneyS,num,when,day,dur,ago,ini,badge,api,errText,toast,loading,empty,errorBox,page,kpis,table,dlg,confirmAct,formDlg,chart,every,crumbs,has,phToday}=A;
 const V=A.views,qs=A.qs;
@@ -14,7 +13,6 @@ const PRESETS=[["today","Today"],["yesterday","Yesterday"],["this_week","This we
 const rangeBar=(st)=>`<form class="bar" data-range><div class="f"><label for="rp">Period</label><select id="rp" name="preset">${PRESETS.map(([v,l])=>`<option value="${v}"${st.preset===v?" selected":""}>${l}</option>`).join("")}</select></div><div class="f" data-cus${st.preset==="custom"?"":" hidden"}><label for="rf">From</label><input id="rf" name="from" type="date" min="2020-01-01" value="${h(st.from||"")}"></div><div class="f" data-cus${st.preset==="custom"?"":" hidden"}><label for="rt">To</label><input id="rt" name="to" type="date" min="2020-01-01" value="${h(st.to||"")}"></div></form>`;
 function bindRange(el,st,load){const f=$("[data-range]",el);f.addEventListener("change",()=>{new FormData(f).forEach((v,k)=>st[k]=v);$$("[data-cus]",f).forEach(x=>x.hidden=st.preset!=="custom");if(st.preset!=="custom"||(st.from&&st.to))load()})}
 
-/* ---------------- AI Support Users ---------------- */
 async function aiUserDrawer(u0,reload){
   const r=await api("ai_user_get?id="+u0.id);if(!r.ok){toast(errText(r),"err");return}
   const {user:u,conversations,notes,handoffs,counts}=r.j;
@@ -39,7 +37,6 @@ V["ai-users"]=el=>A.list(el,{title:"AI Support Users",icon:"user",desc:"Visitors
     {l:"Conversations",f:u=>num(u.conversations),c:"num"},{l:"Messages",f:u=>num(u.messages),c:"num"},{l:"Handoffs",f:u=>num(u.handoffs),c:"num"},{l:"First seen",f:u=>day(u.first_seen_at)},{l:"Last activity",f:u=>ago(u.last_seen_at)}],
   click:(u,reload)=>aiUserDrawer(u,reload)});
 
-/* ---------------- AI Conversations ---------------- */
 async function convoDetail(el,id){
   const r=await api("ai_convo_get?id="+encodeURIComponent(id));if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=A.go;return}
   const {conversation:c,messages,handoffs,notes}=r.j;crumbs(c.title||"Conversation");
@@ -55,7 +52,6 @@ V["ai-conversations"]=(el,[id])=>id?convoDetail(el,id):A.list(el,{title:"AI Supp
   cols:[{l:"Conversation",f:c=>`<b>${h(c.title||"(no messages yet)")}</b><br><span class="small">${h(c.user?.display_name||"")}</span>`},{l:"Status",f:c=>badge(c.status)},{l:"Owner",f:c=>c.owner==="human"?'<span class="bd ok">Human</span>':'<span class="bd in">AI</span>'},{l:"Category",f:c=>h(CAT[c.category]||"—")},{l:"Msgs",f:c=>num(c.message_count),c:"num"},{l:"Updated",f:c=>ago(c.updated_at)}],
   click:c=>location.hash="#/ai-conversations/"+c.id});
 
-/* ---------------- AI Resolution Analytics ---------------- */
 V["ai-analytics"]=async el=>{
   const st={preset:"this_month"};
   el.innerHTML=page("AI Resolution Analytics","pie-chart","Calculated from stored conversations and handoff requests. Nothing is estimated.")+rangeBar(st)+`<div data-out>${loading()}</div>`;
@@ -70,7 +66,6 @@ V["ai-analytics"]=async el=>{
   bindRange(el,st,load);load();
 };
 
-/* ---------------- Handoff queue / detail / escalation history ---------------- */
 async function handoffDetail(el,id){
   const r=await api("handoff_get?id="+encodeURIComponent(id));if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=A.go;return}
   const {request:x,history,messages,notifications,notes,mine,conversation:cv,previous_requests:prev,sla,can:C}=r.j,s=x.summary||{},open=["waiting","assigned","in_progress","waiting_customer"].includes(x.status),closed=x.status==="closed";crumbs(x.id);
@@ -118,7 +113,6 @@ async function handoffDetail(el,id){
   });
 }
 A.handoffDetail=(el,id)=>handoffDetail(el,id);
-// "Close This Case": explicit consequences, optional reason, Confirm Close / Cancel. Cancel sends nothing.
 function closeCaseDlg(x,after){
   const d=dlg(`<form novalidate data-closeform><h2>${I("lock")} Close This Case?</h2><p class="small" style="font-size:13.5px">Case <b>${h(x.id)}</b> · ${h(x.user?.display_name||"")}. After closing:</p>
     <ul class="clist">${CLOSE_EFFECTS.map(t=>`<li>${h(t)}</li>`).join("")}</ul>
@@ -142,7 +136,6 @@ V.escalations=el=>A.list(el,{title:"Escalation History",icon:"history",desc:"Eve
   filters:[{n:"q",l:"Request ID"},{n:"status",l:"Status",t:"select",o:[["","All"],["waiting","Waiting"],["assigned","Assigned"],["in_progress","In Progress"],["waiting_customer","Waiting for Customer"],["resolved","Resolved"],["ended","Ended (back to AI)"],["closed","Closed (locked)"],["cancelled","Cancelled"]]},{n:"priority",l:"Priority",t:"select",o:[["","All"],...Object.entries(PRIO)]},{n:"reason",l:"Reason",t:"select",o:A.opts(REASON)},{n:"from",l:"From",t:"date"},{n:"to",l:"To",t:"date"}],
   cols:[...hcols,{l:"Outcome",f:x=>x.status==="closed"?"Closed "+day(x.closed_at):x.resolved_at?"Resolved "+day(x.resolved_at):x.cancelled_at?"Cancelled":x.closed_at?"Ended "+day(x.closed_at):"Open"}],click:x=>location.hash="#/handoffs/"+x.id});
 
-/* ---------------- Human Support Management ---------------- */
 V.support=async el=>{
   const load=async()=>{
     const r=await api("support_overview");if(!r.ok){el.innerHTML=errorBox(errText(r));$("[data-retry]",el).onclick=load;return}
@@ -161,7 +154,6 @@ V.support=async el=>{
   await load();every(load,15000);
 };
 
-/* ---------------- Reports ---------------- */
 async function reportForm(reload){
   const t=await api("team_options");const opts=(t.j.rows||[]).filter(m=>m.status==="active");
   if(!opts.length){toast("Add an active team member first (Team Management).","err");return}
@@ -215,9 +207,6 @@ async function reportDrawer(row,reload){
       onSubmit:async v=>{const p={id:x.id,reason:v.reason};for(const k of["title","recovered","revenue","report_date","category","description","account_info"])if(String(v[k]??"")!==String(x[k]??""))p[k]=v[k];const y=await api("report_edit",p);if(y.ok){toast(y.j.effect==="returned_to_review"?"Saved. The report went back to Pending for a new approval.":y.j.effect==="unpublished"?"Saved. The report was unpublished: publish it again after checking the public text.":"Report updated.","ok");re();return true}return errText(y)}});
   });
 }
-// Public photos: explicit per-photo selection. Originals stay private; selected photos are copied (metadata
-// removed) to the public image bucket. Status: live (public now), ready (copied, goes live when published),
-// staged (selected, copied again on publish), missing (published but no copy — use Sync).
 async function photos(d,x,re){
   const box=$("[data-photos]",d);if(!box)return;
   const head=`<h3>${I("image")} Public photos</h3>`;
@@ -248,8 +237,6 @@ async function photos(d,x,re){
       return formDlg({title:"Replace public photo",intro:"The current public copy is deleted (its link stops working) and the chosen photo takes its place.",fields:[{n:"evidence_id",l:"Replace with",t:"select",o:opts.map(e=>[e.id,`Evidence #${e.id} · ${e.mime.split("/")[1].toUpperCase()} · ${Math.round(e.size_bytes/1024)} KB`])}],submit:"Replace",onSubmit:async v=>{const y=await api("report_photo_replace",{id:x.id,image_id:id,evidence_id:+v.evidence_id});if(y.ok){toast("Photo replaced.","ok");photos(d,x,re);return true}return errText(y)}})}
   });
 }
-// Permanent deletion: explains what is removed, requires a reason, the report ID typed back and an explicit
-// acknowledgement; the server additionally requires delete_reports and a recent password confirmation.
 function purgeDlg(x,nEv,nHist,nNotes,done){
   const dg=dlg(`<form novalidate><h2>${I("trash")} Delete report ${h(x.id)} permanently?</h2>
     <p class="small" style="font-size:13.5px"><b>${h(x.title||"Report "+x.id)}</b> · ${h(x.name)} · activity ${day(x.report_date)}${x.published_at?" · <b>published</b>":""}</p>
@@ -294,7 +281,6 @@ V.reports=async el=>{
       $$("[data-job]",jb).forEach(b=>b.onclick=async()=>{const r=await A.run("report_purge_retry",{job_id:b.dataset.job},"Deletion completed.",b);if(r.ok)V.reports(el)})}}
 };
 
-/* ---------------- Revenue ---------------- */
 async function revenueForm(rec,reload){
   const team=(await api("team_options")).j.rows||[];
   formDlg({title:rec?`Adjust ${rec.id}`:"New revenue record",intro:rec?"Manual adjustments need a reason; old and new values are kept in the history. Changing the amount or date of verified revenue sends it back to Pending for re-verification.":"New records start as Pending (or Projected for future dates) and only count as actual revenue after verification.",
@@ -327,7 +313,6 @@ V.revenue=async el=>{
   $("[data-csv]",el).onclick=()=>A.download("revenue_export",{kind:"records",...L.state.f});
 };
 
-/* ---------------- Revenue Analytics ---------------- */
 V.analytics=async el=>{
   const st={preset:"this_month",group:""};
   el.innerHTML=page("Revenue Analytics","bar-chart","Philippine calendar (UTC+8). Actual revenue counts verified/approved records only; projected and pending are shown separately. History from 2020-01-01.",`<button class="btn ghost sm" type="button" data-csv>${I("download")} Records CSV</button><button class="btn ghost sm" type="button" data-csvm>${I("download")} Members CSV</button>`)+rangeBar(st)+
@@ -350,7 +335,6 @@ V.analytics=async el=>{
   load();
 };
 
-/* ---------------- Live Team Performance ---------------- */
 V.performance=async el=>{
   const st={preset:"this_month"};let ver="";
   el.innerHTML=page("Live Team Performance","activity",`Updates automatically every 10 seconds from approved reports and verified revenue (controlled polling; it re-renders only when data changes). <span data-live class="small"></span>`)+rangeBar(st)+`<div data-out>${loading(6)}</div>`;
@@ -365,7 +349,6 @@ V.performance=async el=>{
   bindRange(el,st,()=>{ver="";load(true)});load(true);every(()=>load(false),10000);
 };
 
-/* ---------------- Announcements ---------------- */
 async function annForm(a,reload){
   const [team,roles]=await Promise.all([api("team_options"),api("staff_list?limit=1")]);
   const iso=t=>t?new Date(Date.parse(t)+8*36e5).toISOString().slice(0,16):"";
