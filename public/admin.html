@@ -17,22 +17,32 @@
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <main id="login" class="login" hidden>
-  <div class="lcard">
-    <div class="lbrand"><img src="/assets/logo-h.png" alt="" width="44" height="44"><div><b>CHDS Admin</b><small>Secure dashboard</small></div></div>
-    <form id="s1" class="lform" autocomplete="off" novalidate>
-      <p>Step 1 of 2 — sign in with your Telegram user ID and your password.</p>
-      <label for="uid">Telegram user ID</label><input id="uid" inputmode="numeric" required maxlength="20" autocomplete="username">
-      <label for="pw">Password</label><input id="pw" type="password" required maxlength="200" autocomplete="current-password">
-      <button class="btn" type="submit">Continue</button>
-    </form>
-    <form id="s2" class="lform" autocomplete="off" hidden novalidate>
-      <p>Step 2 of 2 — enter the 6-digit code our Telegram bot sent you. It expires in 5 minutes.</p>
-      <label for="code">6-digit code</label><input id="code" inputmode="numeric" pattern="\d{6}" maxlength="6" required autocomplete="one-time-code">
-      <button class="btn" type="submit">Sign in</button>
-      <button class="btn ghost" type="button" id="back">Start over</button>
-    </form>
-    <div class="ferr" id="lerr" role="alert"></div>
-    <p class="small">Protected by a password and a one-time Telegram code. Sessions end after inactivity.</p>
+  <div class="lwrap">
+    <section class="lside">
+      <span class="lpill"><i data-icon="shield-check"></i> CHDS staff only</span>
+      <h1>Run CHDS operations from one secure place.</h1>
+      <ul class="lfeat"><li><i data-icon="lock"></i><span>Two-step sign-in with your password and a Telegram code</span></li><li><i data-icon="history"></i><span>Every sensitive action is recorded in the audit log</span></li><li><i data-icon="clock"></i><span>Sessions end automatically after inactivity</span></li></ul>
+    </section>
+    <div class="lcard" id="lcard">
+      <div class="lbrand"><img src="/assets/logo-h.png" alt="" width="44" height="44"><div><b>CHDS Admin</b><small>Secure dashboard</small></div></div>
+      <div class="lsteps" aria-hidden="true"><span class="on"></span><span></span></div>
+      <form id="s1" class="lform" autocomplete="off" novalidate>
+        <h2>Sign in</h2>
+        <p>Step 1 of 2 — sign in with your Telegram user ID and your password.</p>
+        <label for="uid">Telegram user ID</label><input id="uid" inputmode="numeric" required maxlength="20" autocomplete="username">
+        <label for="pw">Password</label><div class="pwf"><input id="pw" type="password" required maxlength="200" autocomplete="current-password"><button class="pwt" type="button" id="pwt" aria-label="Show password" aria-pressed="false" aria-controls="pw"></button></div>
+        <button class="btn" type="submit">Continue</button>
+      </form>
+      <form id="s2" class="lform" autocomplete="off" hidden novalidate>
+        <h2>Check Telegram</h2>
+        <p>Step 2 of 2 — enter the 6-digit code our Telegram bot sent you. It expires in 5 minutes.</p>
+        <label for="code">6-digit code</label><input id="code" class="otp" inputmode="numeric" pattern="\d{6}" maxlength="6" required autocomplete="one-time-code">
+        <button class="btn" type="submit">Sign in</button>
+        <button class="btn ghost" type="button" id="back">Start over</button>
+      </form>
+      <div class="ferr" id="lerr" role="alert"></div>
+      <p class="small lnote">Protected by a password and a one-time Telegram code. Sessions end after inactivity.</p>
+    </div>
   </div>
 </main>
 <div id="app" hidden>
