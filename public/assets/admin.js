@@ -17,9 +17,9 @@ const phToday=()=>new Date(Date.now()+8*36e5).toISOString().slice(0,10);
 const BD={active:"ok",approved:"ok",actual:"ok",resolved:"ok",verified:"ok",published:"ok",sent:"ok",live:"ok",completed:"ok",
   pending:"wa",reviewed:"in",projected:"in",waiting:"wa",awaiting_confirmation:"wa",assigned:"in",in_progress:"in",waiting_customer:"wa",handoff:"wa",draft:"",wait:"wa",running:"in",
   rejected:"no",suspended:"wa",banned:"no",blocked:"no",cancelled:"no",failed:"no",closed:"no",ended:"",archived:"",inactive:"wa",removed:"no",
-  changes_requested:"wa",unpublished:"",urgent:"no",high:"wa",normal:"",low:"",unread:"in"};
+  changes_requested:"wa",unpublished:"",deleting:"no",withdrawn:"wa",urgent:"no",high:"wa",normal:"",low:"",unread:"in"};
 const LABEL={waiting:"Waiting for Agent",assigned:"Assigned",in_progress:"In Progress",waiting_customer:"Waiting for Customer",awaiting_confirmation:"Awaiting confirmation",handoff:"With human",
-  ended:"Ended (back to AI)",closed:"Closed · locked",changes_requested:"Corrections requested"};
+  ended:"Ended (back to AI)",closed:"Closed · locked",deleting:"Deleting…",withdrawn:"Withdrawn",changes_requested:"Corrections requested"};
 const badge=s=>`<span class="bd ${BD[s]??""}">${h(LABEL[s]||String(s||"—").replace(/_/g," "))}</span>`;
 
 let ME=null,route="",timers=[],globalTimers=[],idleMs=600000,last=Date.now(),pingAt=0,badgeN=0,lastWaiting=null;
@@ -28,7 +28,10 @@ let ME=null,route="",timers=[],globalTimers=[],idleMs=600000,last=Date.now(),pin
 async function api(op,body,o={}){
   const opt={credentials:"same-origin",cache:"no-store",headers:{}};
   if(body!==undefined){opt.method="POST";opt.headers["Content-Type"]="application/json";opt.headers["X-CHDS-Admin"]="1";opt.body=JSON.stringify(body)}
-  let r;try{r=await fetch("/api/admin/"+op,opt)}catch{return{ok:false,status:0,j:{error:"network",message:"Network error. Check your connection."}}}
+  // V6: every request has a timeout (no endless spinner). Destructive operations are never retried automatically.
+  const ctl=new AbortController(),tmo=setTimeout(()=>ctl.abort(),o.timeout||(body!==undefined?60000:30000));opt.signal=ctl.signal;
+  let r;try{r=await fetch("/api/admin/"+op,opt)}catch{clearTimeout(tmo);return{ok:false,status:0,j:ctl.signal.aborted?{error:"timeout",message:"The request timed out. It may still complete on the server — refresh before trying again."}:{error:"network",message:"Network error. Check your connection."}}}
+  clearTimeout(tmo);
   let j={};try{j=await r.json()}catch(e){console.warn("Non-JSON response from",op,r.status)}
   if(r.status===401&&!/^(login|otp|reauth)/.test(op)){const was=!!ME;lock();if(was)lerr("Your session ended (inactivity, sign-out elsewhere or access change). Please sign in again.");return{ok:false,status:401,j}}
   if(r.status===428&&!o.noReauth){const ok=await reauth();if(ok)return api(op,body,{...o,noReauth:true});return{ok:false,status:428,j:{error:"reauth_cancelled",message:"Password confirmation was cancelled. Nothing was changed."}}}
@@ -44,7 +47,7 @@ async function download(op,params){
 
 /* ---------------- UI kit ---------------- */
 function toast(msg,kind="info"){const d=document.createElement("div");d.className="toast "+kind;d.setAttribute("role",kind==="err"?"alert":"status");d.innerHTML=I(kind==="ok"?"circle-check":kind==="err"?"alert-triangle":"info")+`<span>${h(msg)}</span>`;$("#toasts").appendChild(d);setTimeout(()=>d.remove(),kind==="err"?7000:4000)}
-const loading=(n=4)=>`<div class="card" aria-busy="true" aria-label="Loading">${'<div class="skel"></div>'.repeat(n)}</div>`;
+const loading=(n=4,kind)=>kind?UX.skeleton(kind,n):`<div aria-busy="true" aria-label="Loading">${UX.skeleton("kpis",4)}<div style="height:14px"></div>${UX.skeleton("table",5,{cols:5})}</div>`;
 const empty=(t,icon="inbox")=>`<div class="state">${I(icon)}<span>${h(t)}</span></div>`;
 const errorBox=(t)=>`<div class="state err" role="alert">${I("alert-triangle")}<span>${h(t)}</span><button class="btn ghost sm" type="button" data-retry>${I("refresh")} Try again</button></div>`;
 function page(title,icon,desc,actions=""){return`<div class="phd"><div><h1>${I(icon)} ${h(title)}</h1>${desc?`<p>${desc}</p>`:""}</div><div class="acts">${actions}</div></div>`}
@@ -104,9 +107,10 @@ function formDlg({title,fields,submit="Save",intro="",onSubmit,drawer=false}){
       else vals[f.n]=el.value.trim();
       if(f.req&&f.t!=="checkbox"&&!vals[f.n]){er.textContent=`${f.l} is required.`;el.focus();return}
     }
-    const b=$("[type=submit]",d);b.disabled=true;const old=b.textContent;b.textContent="Saving…";
-    const out=await onSubmit(vals);
-    b.disabled=false;b.textContent=old;
+    const b=$("[type=submit]",d);if(b.dataset.uxState==="loading")return; // duplicate submission
+    UX.busy(b,true,submit==="Save"?"Saving…":submit+"…");$("[data-c]",d).disabled=true;
+    let out;try{out=await onSubmit(vals)}catch(x){console.error(x);out="Something went wrong. Please try again."}
+    finally{UX.busy(b,false);const c=$("[data-c]",d);if(c)c.disabled=false}
     if(out===true){d.close();return}er.textContent=out||"Could not save.";
   });
   setTimeout(()=>{const f=$("input:not([type=checkbox]),select,textarea",d);f&&f.focus()},30);
@@ -174,9 +178,10 @@ async function go(){
   const t=titleOf(id);route=t&&can(t.perm)?id:"overview";
   $$("#snav a").forEach(a=>{const on=a.dataset.nav===route;a.classList.toggle("on",on);on?a.setAttribute("aria-current","page"):a.removeAttribute("aria-current")});
   closeSide();crumbs();setTitle();
-  const el=$("#main");el.innerHTML=loading();
+  const el=$("#main");el.innerHTML=loading();UX.bar.start();
   const v=window.ADM.views[route];
   try{await v(el,rest.map(decodeURIComponent))}catch(e){console.error(e);el.innerHTML=errorBox("This page failed to load.");$("[data-retry]",el).onclick=go}
+  finally{UX.bar.done()}
   el.focus({preventScroll:true});
 }
 addEventListener("hashchange",go);

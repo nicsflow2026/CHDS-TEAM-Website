@@ -1,0 +1,73 @@
+/* CHDS V6 — shared loading & feedback system (public site, report portal, dashboard).
+   Lightweight CSS only. Every animation stops under prefers-reduced-motion. */
+:root{--ux-acc:#3B82F6;--ux-acc2:#60A5FA;--ux-line:#22314A;--ux-card:#111D32;--ux-card2:#17243B;--ux-ok:#22C55E;--ux-bad:#EF4444;--ux-ink2:#A5B4C7}
+.ux-sr{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* spinner */
+.ux-spin{display:inline-block;width:1em;height:1em;flex:none;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;opacity:.85;animation:ux-rot .7s linear infinite;vertical-align:-.15em}
+.ux-spin.lg{width:28px;height:28px;border-width:3px}
+@keyframes ux-rot{to{transform:rotate(360deg)}}
+
+/* async buttons: idle / loading / success / error / disabled */
+[data-ux-state]{position:relative}
+[data-ux-state=loading]{cursor:progress!important}
+[data-ux-state=loading],[data-ux-state=loading]:hover{filter:saturate(.85)}
+[data-ux-state=success]{box-shadow:0 0 0 2px rgba(34,197,94,.55)!important}
+[data-ux-state=error]{box-shadow:0 0 0 2px rgba(239,68,68,.6)!important;animation:ux-nudge .3s ease}
+@keyframes ux-nudge{25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+.ux-lbl{display:inline-flex;align-items:center;gap:8px}
+button:disabled,.btn:disabled{cursor:not-allowed}
+
+/* skeletons — shaped like the content they stand in for */
+.ux-sk{position:relative;overflow:hidden;background:var(--ux-card2);border-radius:8px}
+.ux-sk:after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,.055),transparent);animation:ux-shimmer 1.4s ease-in-out infinite}
+@keyframes ux-shimmer{to{transform:translateX(100%)}}
+.ux-sk.line{height:12px;margin:8px 0}.ux-sk.line.w40{width:40%}.ux-sk.line.w60{width:60%}.ux-sk.line.w80{width:80%}
+.ux-sk.title{height:20px;width:45%;margin:4px 0 12px}
+.ux-sk.img{aspect-ratio:4/3;width:100%;border-radius:12px}
+.ux-sk.av{width:36px;height:36px;border-radius:50%;flex:none}
+.ux-sk-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr));gap:12px}
+.ux-sk-card{border:1px solid var(--ux-line);background:var(--ux-card);border-radius:14px;padding:16px}
+.ux-sk-table{border:1px solid var(--ux-line);border-radius:14px;overflow:hidden;background:var(--ux-card)}
+.ux-sk-table .r{display:grid;grid-template-columns:var(--ux-cols,2fr 1fr 1fr 1fr);gap:16px;padding:14px 16px;border-top:1px solid var(--ux-line)}
+.ux-sk-table .r:first-child{border-top:0;background:rgba(255,255,255,.02)}
+.ux-sk-table .r .ux-sk{height:12px}
+.ux-sk-bubbles{display:flex;flex-direction:column;gap:12px;padding:16px}
+.ux-sk-bubbles .b{height:40px;width:62%;border-radius:14px 14px 14px 4px}
+.ux-sk-bubbles .b.me{align-self:flex-end;width:44%;border-radius:14px 14px 4px 14px;background:rgba(59,130,246,.22)}
+.ux-sk-bubbles .b.s{height:24px;width:38%}
+@media (max-width:640px){.ux-sk-table .r{grid-template-columns:1fr 1fr}.ux-sk-table .r .ux-sk:nth-child(n+3){display:none}}
+
+/* full-page and region loaders */
+.ux-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:40px 16px;color:var(--ux-ink2);font-size:14px;text-align:center}
+.ux-page{position:fixed;inset:0;z-index:300;display:grid;place-items:center;background:rgba(8,13,24,.72);backdrop-filter:blur(3px)}
+.ux-page>div{display:flex;align-items:center;gap:12px;padding:14px 18px;border-radius:14px;border:1px solid var(--ux-line);background:var(--ux-card);color:#F8FAFC;font-size:14px}
+
+/* top navigation progress bar */
+#ux-bar{position:fixed;top:0;left:0;height:2px;width:0;z-index:400;background:linear-gradient(90deg,var(--ux-acc),var(--ux-acc2));box-shadow:0 0 8px rgba(59,130,246,.6);opacity:0;transition:width .3s ease,opacity .3s ease;pointer-events:none}
+#ux-bar.on{opacity:1}
+
+/* determinate progress (uploads, deletion steps) */
+.ux-progress{height:6px;border-radius:999px;background:var(--ux-card2);overflow:hidden}
+.ux-progress>i{display:block;height:100%;width:0;border-radius:inherit;background:var(--ux-acc);transition:width .2s ease}
+.ux-progress.ok>i{background:var(--ux-ok)}.ux-progress.bad>i{background:var(--ux-bad)}
+.ux-progress.indet>i{width:35%!important;animation:ux-indet 1.1s ease-in-out infinite}
+@keyframes ux-indet{from{transform:translateX(-100%)}to{transform:translateX(300%)}}
+
+/* inline status lines (empty / error / retry) */
+.ux-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 16px;text-align:center;color:var(--ux-ink2);font-size:14px;border:1px dashed var(--ux-line);border-radius:14px}
+.ux-state.err{border-style:solid;border-color:rgba(239,68,68,.45);background:rgba(239,68,68,.06);color:#FECACA}
+
+/* step list (multi-step operations such as permanent deletion) */
+.ux-steps{list-style:none;margin:0;padding:0;display:grid;gap:8px;font-size:13.5px}
+.ux-steps li{display:flex;align-items:center;gap:10px;color:var(--ux-ink2)}
+.ux-steps li:before{content:"";width:14px;height:14px;border-radius:50%;border:2px solid var(--ux-line);flex:none}
+.ux-steps li.run{color:#F8FAFC}.ux-steps li.run:before{border-color:var(--ux-acc);border-right-color:transparent;animation:ux-rot .7s linear infinite}
+.ux-steps li.done{color:#F8FAFC}.ux-steps li.done:before{background:var(--ux-ok);border-color:var(--ux-ok)}
+.ux-steps li.fail{color:#FECACA}.ux-steps li.fail:before{background:var(--ux-bad);border-color:var(--ux-bad)}
+
+@media (prefers-reduced-motion:reduce){
+  .ux-spin,.ux-steps li.run:before{animation-duration:2.4s}
+  .ux-sk:after,.ux-progress.indet>i,[data-ux-state=error]{animation:none}
+  #ux-bar{transition:none}
+}

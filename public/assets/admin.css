@@ -170,3 +170,24 @@ select[data-prio]{font:inherit;font-size:13px;color:var(--ink);background:var(--
 .card .kv{grid-template-columns:minmax(96px,max-content) minmax(0,1fr)}
 @media (max-width:480px){.card .kv{grid-template-columns:minmax(0,1fr)}.card .kv dt{margin-top:6px}}
 dialog .clist{padding-left:18px}
+
+/* ===================== V6: public photos, permanent deletion, loading ===================== */
+[data-list].refreshing{opacity:.6;transition:opacity .15s ease;pointer-events:none}
+.dbanner{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;margin:0 0 14px;border-radius:12px;border:1px solid rgba(239,68,68,.45);background:rgba(239,68,68,.08);font-size:13.5px}
+.dbanner>.i{color:#FCA5A5;margin-top:2px}.dbanner b{display:block;margin-bottom:2px}.dbanner p{margin:2px 0 8px}
+.dbanner.warn{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.08)}.dbanner.warn>.i{color:#FCD34D}
+.dbanner .acts{flex-wrap:wrap;align-items:center;gap:8px}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(150px,100%),1fr));gap:10px;margin-top:10px}
+.pcell{margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg2);display:flex;flex-direction:column;min-width:0}
+.pcell.sel{border-color:rgba(59,130,246,.6);box-shadow:0 0 0 1px rgba(59,130,246,.35)}
+.pimg{aspect-ratio:4/3;background:var(--card2);display:grid;place-items:center;position:relative;overflow:hidden}
+.pimg img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .2s ease}
+.pimg.ld img{opacity:0}.pimg.ld:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.05),transparent);animation:ux-shimmer 1.4s ease-in-out infinite}
+.pcell figcaption{padding:8px;display:grid;gap:6px;font-size:12.5px}
+.palt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pacts{display:flex;flex-wrap:wrap;gap:4px}.pacts .btn{padding:4px 8px;min-height:32px;font-size:12px}
+.pchk{display:flex;align-items:center;gap:6px;cursor:pointer;min-height:32px;color:var(--ink)}
+.pchk input{width:18px;height:18px}
+.dlist{margin:0 0 14px;padding-left:18px;font-size:13.5px;color:var(--ink2);display:grid;gap:4px}
+.pgstate{margin:4px 0 12px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--bg2)}
+@media (prefers-reduced-motion:reduce){[data-list].refreshing{transition:none}.pimg.ld:after{animation:none}}

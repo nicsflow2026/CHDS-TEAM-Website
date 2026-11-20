@@ -16,10 +16,13 @@ A.list=function(host,cfg){
     (cfg.filters&&cfg.filters.length?`<form class="bar" data-filters role="search">${cfg.filters.map(f=>`<div class="f${f.w?" wide":""}"><label for="flt_${f.n}">${h(f.l)}</label>${f.t==="select"?`<select id="flt_${f.n}" name="${f.n}">${f.o.map(([v,l])=>`<option value="${h(v)}"${String(st.f[f.n]??"")===String(v)?" selected":""}>${h(l)}</option>`).join("")}</select>`:`<input id="flt_${f.n}" name="${f.n}" type="${f.t||"search"}" value="${h(st.f[f.n]||"")}" ${f.t==="search"||!f.t?'placeholder="Search…" maxlength="60"':""}>`}</div>`).join("")}</form>`:"")+
     `<div data-list>${loading()}</div>`;
   const box=$("[data-list]",el);
+  const guard=UX.latest();let shown=false;
   async function load(){
-    box.setAttribute("aria-busy","true");
+    const t=guard.next();box.setAttribute("aria-busy","true");
+    if(!shown)box.innerHTML=UX.skeleton("table",6,{cols:Math.min(6,cfg.cols.length)});else box.classList.add("refreshing");
     const lim=cfg.limit||25,r=await api(cfg.op+"?"+qs({...st.f,offset:st.offset,limit:lim}));
-    box.removeAttribute("aria-busy");
+    if(!guard.is(t))return; // a newer filter/page request replaced this one: never render stale rows
+    box.removeAttribute("aria-busy");box.classList.remove("refreshing");shown=true;
     if(!r.ok){box.innerHTML=errorBox(errText(r));$("[data-retry]",box).onclick=load;return}
     rows=cfg.rows?cfg.rows(r.j):r.j.rows||[];
     box.innerHTML=(cfg.above?cfg.above(r.j):"")+table(cfg.cols,rows,{click:!!cfg.click,emptyText:cfg.emptyText})+pager(r.j.total??rows.length,st.offset,lim);
@@ -37,7 +40,13 @@ A.list=function(host,cfg){
   load();return{reload:load,state:st};
 };
 // Run an API action, toast the result. Returns the response.
-A.run=async(op,body,okMsg)=>{const r=await api(op,body);if(r.ok){if(okMsg)toast(okMsg,"ok")}else if(r.status!==428)toast(errText(r),"err");return r};
+// A.run(op, body, okMsg, btn?) — with a button: loading state, duplicate clicks ignored, success/error flash.
+A.run=async(op,body,okMsg,btn)=>{
+  if(btn&&btn.dataset.uxState==="loading")return{ok:false,status:0,j:{error:"busy"}};
+  if(btn)UX.busy(btn,true,btn.dataset.busy||"Working…");
+  let r;try{r=await api(op,body)}finally{if(btn)UX.busy(btn,false)}
+  if(btn)UX.flash(btn,r.ok?"success":"error");
+  if(r.ok){if(okMsg){toast(okMsg,"ok");UX.announce(okMsg)}}else if(r.status!==428)toast(errText(r),"err");return r};
 A.drawer=(title,html)=>{const d=dlg(`<div class="db"><div class="dh"><h2>${h(title)}</h2><button class="ibtn" type="button" data-close aria-label="Close">${I("x")}</button></div>${html}</div>`,{drawer:true,label:title});$("[data-close]",d).onclick=()=>d.close();return d};
 A.transcript=(msgs)=>msgs.length?`<div class="tr">${msgs.map(m=>{const who={user:"Customer",assistant:"CHDS AI",agent:m.author||"Agent",system:"System",summary:"AI-generated summary (not the customer's words)",note:m.author||"Agent note"}[m.role]||m.role;
   return`<div class="tm ${h(m.role)}"><b>${h(who)} · ${when(m.created_at)}</b>${h(m.body)}${m.meta&&m.meta.ocr?`<div class="small">Screenshot text (OCR): ${h(String(m.meta.ocr).slice(0,400))}</div>`:""}</div>`}).join("")}</div>`:empty("No messages.");
