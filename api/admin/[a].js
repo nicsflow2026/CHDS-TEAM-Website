@@ -10,8 +10,9 @@ import { ops as support } from "../../lib/admin/support.js";
 import { ops as business } from "../../lib/admin/business.js";
 import { ops as system } from "../../lib/admin/system.js";
 import { ops as v5 } from "../../lib/admin/v5.js";
+import { ops as v6 } from "../../lib/admin/v6.js";
 
-export const OPS = { ...people, ...support, ...business, ...system, ...v5 };
+export const OPS = { ...people, ...support, ...business, ...system, ...v5, ...v6 };
 
 const handler = async (req, res) => {
   res.setHeader("Cache-Control", "no-store"); res.setHeader("X-Robots-Tag", "noindex");
