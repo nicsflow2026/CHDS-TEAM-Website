@@ -1,5 +1,3 @@
-// Public: { ok, database_ok } only (rate limited). With X-Setup-Key: <WEBHOOK_SECRET> it returns the full
-// configuration checklist (booleans and counts only — never secret values).
 import { api, E, dbCheck, aiModels, aiChat, team, ids, teamConfigIssues, botToken, serviceKey, limited, sb } from "../lib/core.js";
 import { timingSafeEqual, createHash } from "node:crypto";
 const same = (a, b) => timingSafeEqual(createHash("sha256").update(String(a)).digest(), createHash("sha256").update(String(b)).digest());

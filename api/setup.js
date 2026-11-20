@@ -2,7 +2,6 @@ import { api, E, tg, limited } from "../lib/core.js";
 import { syncCommands } from "../lib/tgcommands.js";
 import { timingSafeEqual, createHash } from "node:crypto";
 const same = (a, b) => timingSafeEqual(createHash("sha256").update(String(a)).digest(), createHash("sha256").update(String(b)).digest());
-// Optional CLI alternative to the admin panel button: POST /api/setup with header X-Setup-Key: <WEBHOOK_SECRET>
 export default api(async (req, res) => {
   const key = req.headers["x-setup-key"];
   if (req.method !== "POST") return res.status(405).json({ error: "method" });
