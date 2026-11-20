@@ -6,9 +6,12 @@ import { api, sb, settings, limited, like } from "../../lib/core.js";
 import { publicUrl } from "../../lib/storage.js";
 import { isDate } from "../../lib/validate.js";
 import { REPORT_CATEGORIES, CATEGORY_LABEL } from "../../lib/reports.js";
+import { publicPhotosFor } from "../../lib/publicimages.js";
 
-const feedOut = r => ({ id: r.id, title: r.title, summary: r.summary || "", category: r.category, category_label: CATEGORY_LABEL[r.category] || "Other",
-  activity_date: r.activity_date, published_at: r.published_at, recovered: Number(r.recovered) || 0, member: r.member_name || "CHDS Team" });
+// Allow-listed public fields only. photos: public-bucket URLs of photos an administrator explicitly selected —
+// never private evidence, storage paths of private files, or attachment metadata.
+const feedOut = (r, photos) => ({ id: r.id, title: r.title, summary: r.summary || "", category: r.category, category_label: CATEGORY_LABEL[r.category] || "Other",
+  activity_date: r.activity_date, published_at: r.published_at, recovered: Number(r.recovered) || 0, member: r.member_name || "CHDS Team", photos: photos || [] });
 
 export default api(async (req, res) => {
   if (req.method !== "GET") return res.status(405).json({ error: "method" });
@@ -33,10 +36,12 @@ export default api(async (req, res) => {
     const f = [REPORT_CATEGORIES.includes(qy.category) ? `&category=eq.${qy.category}` : "", isDate(qy.from) ? `&activity_date=gte.${qy.from}` : "", isDate(qy.to) ? `&activity_date=lte.${qy.to}` : "",
       term ? `&or=(title.ilike.${like(term)},summary.ilike.${like(term)})` : ""].join("");
     const r = await sb(`/public_report_feed?select=id,title,summary,category,activity_date,published_at,recovered,member_name${f}&order=published_at.desc,id.desc&limit=${limit}&offset=${offset}`, { count: true });
-    const rows = r.rows.map(feedOut);
-    res.setHeader("Cache-Control", "public, s-maxage=15, stale-while-revalidate=30");
+    const photos = await publicPhotosFor(r.rows.map(x => x.id));
+    const rows = r.rows.map(x => feedOut(x, photos[x.id]));
+    // V6: not cached by the CDN, so a publish, unpublish, photo change or permanent deletion is visible on the next request
+    res.setHeader("Cache-Control", "no-store");
     return res.json({ rows, total: r.total, offset, limit, categories: REPORT_CATEGORIES.map(k => [k, CATEGORY_LABEL[k]]),
-      version: createHash("sha1").update(r.total + "|" + rows.map(x => x.id + x.published_at).join(",")).digest("hex").slice(0, 12) });
+      version: createHash("sha1").update(r.total + "|" + rows.map(x => x.id + x.published_at + x.photos.map(p => p.url).join(";")).join(",")).digest("hex").slice(0, 12) });
   }
   return res.status(404).json({ error: "not_found" });
 }, { name: "api/public" });
