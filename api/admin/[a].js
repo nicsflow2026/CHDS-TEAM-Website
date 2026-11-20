@@ -1,7 +1,4 @@
-// Admin dashboard API. Every operation declares its permission; this router enforces authentication,
-// CSRF protection (custom header + same-origin), permissions, re-authentication for sensitive actions,
-// rate limits and audit context. The browser never decides what a user may do.
-import { api, sb, jsonBody, sameOrigin, audit, securityEvent, hit, clientIp } from "../../lib/core.js";
+import { api, jsonBody, sameOrigin, audit, securityEvent, hit, clientIp } from "../../lib/core.js";
 import { can, canAny } from "../../lib/rbac.js";
 import { session, login, otp, reauth, revokeSessions, setCookie, IDLE } from "../../lib/admin/auth.js";
 import { HttpError } from "../../lib/admin/util.js";
@@ -47,7 +44,7 @@ const handler = async (req, res) => {
       if (!(await hit("sec-forbid:" + ses.uid, 20, 3600))) await securityEvent("forbidden", { severity: "warning", actor: ses.uid, req, detail: { op: a, needs: op.perm } });
       return fail(403, "forbidden", "Your role does not include this permission.");
     }
-    if (await hit("adm:" + ses.uid, 600, 60)) return fail(429, "rate_limited"); // every authenticated request
+    if (await hit("adm:" + ses.uid, 600, 60)) return fail(429, "rate_limited");
     if (post && (await hit("adm-w:" + ses.uid, 120, 60))) return fail(429, "rate_limited");
     if (op.reauth && !ses.reauthOk) return fail(428, "reauth_required", "Confirm your password to continue.");
     const ctx = { req, res, b, qy: req.query || {}, ses, p: ses.p, idle: IDLE(),
@@ -57,7 +54,7 @@ const handler = async (req, res) => {
     return res.json(out ?? { ok: true });
   } catch (e) {
     if (e instanceof HttpError) return fail(e.status, e.code, e.message !== e.code ? e.message : undefined);
-    throw e; // api() logs to app_errors and answers 500 / 503
+    throw e;
   }
 };
 export default api(handler, { cors: false, name: "api/admin" });
