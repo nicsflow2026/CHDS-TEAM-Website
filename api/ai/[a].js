@@ -90,8 +90,15 @@ export default api(async (req, res) => {
   if (a === "conversation" && req.method === "GET") {
     const c = await ownConversation(v.user.id, req.query.id);
     if (!c) return res.status(404).json({ error: "not_found" }); // also for other visitors' conversations
-    const msgs = await sb(`/ai_support_messages?conversation_id=eq.${q(c.id)}&${VISIBLE}&order=id.asc&limit=400&select=id,role,author,body,created_at,kind:meta->>kind`);
-    return res.json({ conversation: convOut(c), messages: msgs, handoff: await handoffState(c), quota: await quotaInfo(req, v.user.id) });
+    const rows = await sb(`/ai_support_messages?conversation_id=eq.${q(c.id)}&${VISIBLE}&order=id.asc&limit=400&select=id,role,author,body,created_at,meta`);
+    // Only safe fields reach the browser. mid/sid identify messages mirrored from a Human Support room, so the
+    // widget resumes polling AFTER them (no duplicate agent messages after a refresh or reconnect).
+    const msgs = rows.map(m => ({ id: m.id, role: m.role, author: m.author, body: m.body, created_at: m.created_at, kind: (m.meta && m.meta.kind) || null,
+      ...(m.meta && m.meta.msg_id ? { mid: Number(m.meta.msg_id), sid: m.meta.sid } : {}) }));
+    const lastTalk = [...msgs].reverse().find(m => ["user", "assistant", "agent"].includes(m.role));
+    return res.json({ conversation: convOut(c), messages: msgs, handoff: await handoffState(c), quota: await quotaInfo(req, v.user.id),
+      // an AI conversation whose latest message is the customer's has no reply yet (failed or interrupted): the widget offers Retry
+      pending_reply: !c.closed_at && c.owner === "ai" && !!lastTalk && lastTalk.role === "user" ? lastTalk.id : null });
   }
 
   if (a === "resolve" && post) {
