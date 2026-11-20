@@ -1,5 +1,43 @@
 # Changelog
 
+## V7 — 2026-11-20
+
+### Design and animation
+* Shared motion layer in `ux.css` / `ux.js`: cross-page View Transitions, entrance animations, scroll reveal with
+  stagger (once only), hover lift, pressed and size-locked loading buttons, success/error states, animated
+  `<dialog>` open/close, drawer scroll lock, reduced-motion support. No animation library added (ANIMATION_SYSTEM.md).
+* Redesigned Admin Login (split layout, two-step indicator, show/hide password, shake on error, success transition).
+* Dashboard: animated sidebar indicator, KPI stagger, table row entrance, chart growth/draw, animated dropdown and
+  modals, mobile sidebar scroll lock.
+* Report Portal: four numbered form sections, refined focus states, styled evidence picker, animated upload rows.
+* Public Reports: staggered cards, animated lightbox, search spinner. Public site: card and nav hover, ambient
+  background, mobile menu with scrim, scroll lock and outside-tap close.
+
+### Customer-facing Human Support removed
+* Widget: no human request, waiting/connected states, agent card, rating card or quota countdown. Earlier handed-off
+  conversations open read-only. Routes `/api/human/*`, `/api/ai/handoff`, `/api/ai/cancel`, `/api/ai/feedback`,
+  `/api/ai/quota` and the code only they used were removed. The AI no longer offers or signals human escalation.
+* Copy: Human Support promotion removed from Home, Contact, FAQ and Team. Data, admin tools and Telegram unchanged.
+
+### Content
+* Removed "Ask for your password, login codes or ID documents in chat" from the Services and Home lists.
+* The approved password notice is a highlighted security card at the top of the FAQ (exact wording).
+
+### Code quality
+* Descriptive comments removed from all application and test source files with parser-verified tooling; the Lucide
+  licence notice is kept. No TODO/FIXME markers.
+
+### Fixes
+* Mobile menu: a tap on the menu button could be treated as an outside tap after its icon changed (fixed with the
+  event's dispatch path).
+* Mobile menu: the dimming backdrop is a real element. As a pseudo-element it was hidden below 640 px, so an
+  "outside" tap could open a link under the menu.
+* View Transitions: aborted transitions (for example a second navigation during a transition) no longer surface
+  as unhandled page errors.
+* 20 unused imports removed (some predated V7, some were left by the Human Support removal).
+* Search-field spinner and deletion step markers render at their intended 14 px (were 18 px, slightly off-centre).
+* Admin Login: the password field is hidden again whenever the sign-in form resets.
+
 ## V6 — 2026-11-20
 
 ### Report publishing with photos
