@@ -1,7 +1,3 @@
-// Local development server that mimics Vercel: static files from public/ (cleanUrls + vercel.json headers)
-// and /api/* routed to the real serverless handlers.
-//   node scripts/dev-server.mjs            → uses your real .env / environment (Supabase, Telegram, Groq)
-//   node scripts/dev-server.mjs --fake     → TEST ONLY: in-memory test double with fixture data (tests/support/fixtures.mjs)
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { join, extname } from "node:path";
@@ -11,7 +7,7 @@ if (FAKE) await (await import("../tests/support/fixtures.mjs")).install();
 const vercel = JSON.parse(await readFile("vercel.json", "utf8"));
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png", ".webp": "image/webp", ".txt": "text/plain", ".svg": "image/svg+xml", ".json": "application/json" };
 const H = {
-  ai: "../api/ai/[a].js", human: "../api/human/[a].js", admin: "../api/admin/[a].js", public: "../api/public/[a].js", portal: "../api/portal/[a].js",
+  ai: "../api/ai/[a].js", admin: "../api/admin/[a].js", public: "../api/public/[a].js", portal: "../api/portal/[a].js",
   chat: "../api/chat.js", stats: "../api/stats.js", health: "../api/health.js", setup: "../api/setup.js", telegram: "../api/telegram.js"
 };
 const cache = {};
@@ -24,17 +20,25 @@ function headersFor(path) {
 createServer(async (req, res) => {
   const u = new URL(req.url, "http://localhost"), path = decodeURIComponent(u.pathname);
   for (const [k, v] of Object.entries(headersFor(path))) res.setHeader(k, v);
-  if (FAKE && path === "/__test/last-otp") { // TEST DOUBLE ONLY: read the code the fake Telegram "sent" (admin or portal sign-in)
+  if (FAKE && path === "/__test/last-otp") {
     const m = [...globalThis.__fake.tg.sent].reverse().find(x => x.chat_id === u.searchParams.get("uid") && /(Your code|sign-in code): <code>(\d{6})/.test(x.text));
     res.setHeader("content-type", "application/json"); return res.end(JSON.stringify({ code: m ? /<code>(\d{6})/.exec(m.text)[1] : null }));
   }
-  if (FAKE && path === "/__test/reset-limits") { // TEST DOUBLE ONLY: clear IP rate-limit counters between responsive UI scenarios
+  if (FAKE && path === "/__test/seed-case") {
+    const f = globalThis.__fake, conv = f.t("ai_support_conversations").find(c => c.id === u.searchParams.get("conv"));
+    res.setHeader("content-type", "application/json");
+    if (!conv) { res.statusCode = 404; return res.end('{"error":"not_found"}'); }
+    const id = "HS-" + Math.random().toString(36).slice(2, 10).toUpperCase().padEnd(8, "X"), sid = Math.random().toString(16).slice(2, 18).padEnd(16, "0");
+    const o = f.RPC.create_handoff({ p: { id, sid, conversation_id: conv.id, user_id: conv.user_id, reason: "user_requested", category: "general", summary: { generated_by: "fixture", summary: "Seeded for a UI test." }, idempotency_key: "seed-" + id + "-xxxxxxxx", quota_keys: ["seed:" + id], limit: 100000, cooldown_min: 0 } });
+    return res.end(JSON.stringify(o.error ? o : { rid: id, sid }));
+  }
+  if (FAKE && path === "/__test/reset-limits") {
     globalThis.__fake.T.rate_limits = []; globalThis.__fake.T.support_rate_limits = []; res.setHeader("content-type", "application/json"); return res.end('{"ok":true}');
   }
-  if (FAKE && path === "/__test/reset-quota") { // TEST DOUBLE ONLY: clear Human Support request quotas between UI scenarios
+  if (FAKE && path === "/__test/reset-quota") {
     globalThis.__fake.T.support_rate_limits = []; res.setHeader("content-type", "application/json"); return res.end('{"ok":true}');
   }
-  if (FAKE && path.startsWith("/__fake-storage/")) { // TEST DOUBLE ONLY: serve objects of the in-memory Storage (public + signed URLs)
+  if (FAKE && path.startsWith("/__fake-storage/")) {
     const m = /^\/__fake-storage\/object\/(?:public|sign)\/(.+)$/.exec(u.pathname), key = m ? "/object/" + m[1] : null, b = key && globalThis.__fake.storage.get(key);
     if (!b) { res.statusCode = 404; return res.end(); }
     res.setHeader("content-type", /\.png$/.test(key) ? "image/png" : /\.webp$/.test(key) ? "image/webp" : /\.pdf$/.test(key) ? "application/pdf" : "image/jpeg"); res.setHeader("cache-control", "max-age=300"); return res.end(b);
@@ -45,7 +49,6 @@ createServer(async (req, res) => {
     let raw = ""; for await (const c of req) raw += c;
     const query = Object.fromEntries(u.searchParams); if (seg[2]) query.a = seg[2];
     const r2 = Object.assign(req, { query, body: raw ? (() => { try { return JSON.parse(raw); } catch { return raw; } })() : undefined });
-    // TEST DOUBLE ONLY: storage URLs of the fake Supabase are rewritten to the local /__fake-storage route
     const out = o => { const t = JSON.stringify(o); return FAKE ? t.replaceAll("https://fake.supabase.co/storage/v1", `http://localhost:${PORT}/__fake-storage`) : t; };
     const shim = Object.assign(res, { status(c) { res.statusCode = c; return shim; }, json(o) { if (!res.getHeader("content-type")) res.setHeader("content-type", "application/json"); res.end(out(o)); return shim; }, send(s) { res.end(typeof s === "string" ? s : JSON.stringify(s)); return shim; } });
     try { await (await handler(key))(r2, shim); } catch (e) { console.error(e); if (!res.headersSent) { res.statusCode = 500; res.end("{}"); } }

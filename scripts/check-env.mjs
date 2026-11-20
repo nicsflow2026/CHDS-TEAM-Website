@@ -1,5 +1,3 @@
-// Deployment-time environment validation (runs as the Vercel build command; never prints secret values).
-// Production deploys fail when required variables are missing; preview/local runs only warn.
 import { envReport } from "../lib/core.js";
 const r = envReport(), prod = process.env.VERCEL_ENV === "production";
 for (const m of r.errors) console.error((prod ? "ERROR " : "WARN  ") + m);
