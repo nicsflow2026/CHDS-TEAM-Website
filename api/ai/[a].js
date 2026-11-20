@@ -1,17 +1,10 @@
-// CHDS AI Support visitor API: identity, profile, conversations, resolution, handoff, quota.
-// Every route except GET /api/ai/me requires the identity cookie (direct API calls cannot skip registration).
-import { api, sb, settings, jsonBody, limited, sameOrigin, audit, q, isCaseClosed } from "../../lib/core.js";
-import { cleanName, text as cleanText, int } from "../../lib/validate.js";
-import { redactSecrets } from "../../lib/secrets.js";
-import { notifyStaff } from "../../lib/staffnotify.js";
+import { api, sb, settings, jsonBody, limited, sameOrigin, audit, q } from "../../lib/core.js";
+import { cleanName } from "../../lib/validate.js";
 import { getVisitor, createVisitor, publicProfile, ownConversation } from "../../lib/visitor.js";
-import { requireVisitor, createHandoff, quotaInfo, validConvId } from "../../lib/support.js";
-import { agentProfile } from "../../lib/handoff.js";
-import { closeHumanRoom } from "../../lib/rooms.js";
+import { requireVisitor, validConvId } from "../../lib/support.js";
 
 const VISIBLE = "role=in.(user,assistant,agent,system)";
 const greeting = (name, back) => back ? `Hello, ${name}! Welcome back to CHDS AI Support. How may I help you today?` : `Hello, ${name}! Welcome to CHDS AI Support. How may I help you today?`;
-// closed_at = the case is LOCKED (read-only). The internal closure reason is never sent to the customer.
 const convOut = c => ({ id: c.id, status: c.status, owner: c.owner, title: c.title, category: c.category, created_at: c.created_at, updated_at: c.updated_at, last_message_at: c.last_message_at, resolved_at: c.resolved_at, message_count: c.message_count,
   locked: !!c.closed_at, closed_at: c.closed_at || null });
 const caseClosed = (res, c) => res.status(409).json({ error: "case_closed", closed_at: c ? c.closed_at : null, message: "This conversation is closed. Start a new conversation to get help." });
@@ -21,22 +14,13 @@ async function newConversation(v, back) {
   const m = (await sb("/ai_support_messages", { method: "POST", body: { conversation_id: c.id, user_id: v.user.id, role: "assistant", body: greeting(v.user.display_name, back), meta: { kind: "greeting" } }, prefer: "return=representation" }))[0];
   return { conversation: convOut(c), messages: [{ id: m.id, role: m.role, body: m.body, created_at: m.created_at }] };
 }
-async function handoffState(c) {
-  if (!c.human_sid) return null;
-  const h = (await sb(`/ai_handoff_requests?sid=eq.${q(c.human_sid)}&select=id,status,created_at,assigned_at,assigned_uid,assigned_name,closed_at,csat_rating`))[0];
-  if (!h) return null;
-  const open = ["waiting", "assigned", "in_progress", "waiting_customer"].includes(h.status);
-  return { request_id: h.id, sid: c.human_sid, status: h.status, open, created_at: h.created_at, assigned_at: h.assigned_at, closed: h.status === "closed", closed_at: h.status === "closed" ? h.closed_at : null,
-    can_rate: !!h.assigned_at && h.csat_rating === null && ["resolved", "closed", "ended"].includes(h.status), rated: h.csat_rating !== null && h.csat_rating !== undefined,
-    agent: h.assigned_uid && open ? await agentProfile(h.assigned_uid, h.assigned_name) : null };
-}
 
 export default api(async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const a = String(req.query.a || ""), post = req.method === "POST";
   if (post && !sameOrigin(req, "x-chds-client")) return res.status(403).json({ error: "forbidden" });
   const st = await settings();
-  const flags = { maintenance: st.emergency.maintenance_mode, ai_enabled: !st.emergency.ai_disabled && !st.emergency.maintenance_mode, human_enabled: !st.emergency.human_requests_disabled && !st.emergency.maintenance_mode };
+  const flags = { maintenance: st.emergency.maintenance_mode, ai_enabled: !st.emergency.ai_disabled && !st.emergency.maintenance_mode };
   const b = post ? jsonBody(req) : {};
 
   if (a === "me" && req.method === "GET") {
@@ -45,7 +29,7 @@ export default api(async (req, res) => {
     if (!v) return res.json({ identity: null, flags });
     if (v.user.status !== "active") return res.status(403).json({ error: "blocked", flags });
     const convs = await sb(`/ai_support_conversations?user_id=eq.${q(v.user.id)}&order=updated_at.desc&limit=20&select=*`);
-    return res.json({ identity: publicProfile(v.user), greeting: greeting(v.user.display_name, true), conversations: convs.map(convOut), flags, quota: await quotaInfo(req, v.user.id) });
+    return res.json({ identity: publicProfile(v.user), greeting: greeting(v.user.display_name, true), conversations: convs.map(convOut), flags });
   }
 
   if (a === "identity" && post) {
@@ -62,7 +46,6 @@ export default api(async (req, res) => {
     return res.json({ identity: publicProfile({ ...u, status: "active" }), ...first });
   }
 
-  // everything below requires a registered visitor
   const v = await requireVisitor(req, res); if (!v) return;
 
   if (a === "profile" && post) {
@@ -89,15 +72,12 @@ export default api(async (req, res) => {
 
   if (a === "conversation" && req.method === "GET") {
     const c = await ownConversation(v.user.id, req.query.id);
-    if (!c) return res.status(404).json({ error: "not_found" }); // also for other visitors' conversations
+    if (!c) return res.status(404).json({ error: "not_found" });
     const rows = await sb(`/ai_support_messages?conversation_id=eq.${q(c.id)}&${VISIBLE}&order=id.asc&limit=400&select=id,role,author,body,created_at,meta`);
-    // Only safe fields reach the browser. mid/sid identify messages mirrored from a Human Support room, so the
-    // widget resumes polling AFTER them (no duplicate agent messages after a refresh or reconnect).
     const msgs = rows.map(m => ({ id: m.id, role: m.role, author: m.author, body: m.body, created_at: m.created_at, kind: (m.meta && m.meta.kind) || null,
       ...(m.meta && m.meta.msg_id ? { mid: Number(m.meta.msg_id), sid: m.meta.sid } : {}) }));
     const lastTalk = [...msgs].reverse().find(m => ["user", "assistant", "agent"].includes(m.role));
-    return res.json({ conversation: convOut(c), messages: msgs, handoff: await handoffState(c), quota: await quotaInfo(req, v.user.id),
-      // an AI conversation whose latest message is the customer's has no reply yet (failed or interrupted): the widget offers Retry
+    return res.json({ conversation: convOut(c), messages: msgs,
       pending_reply: !c.closed_at && c.owner === "ai" && !!lastTalk && lastTalk.role === "user" ? lastTalk.id : null });
   }
 
@@ -119,43 +99,10 @@ export default api(async (req, res) => {
       const r = (await sb(`/ai_support_conversations?id=eq.${q(c.id)}&closed_at=is.null`, { method: "PATCH", body: { status: "active", failure_count: c.failure_count + 1, updated_at: now }, prefer: "return=representation" }))[0];
       if (!r) return res.status(409).json({ error: "conflict" });
       await sb("/ai_support_messages", { method: "POST", body: { conversation_id: c.id, user_id: v.user.id, role: "system", body: "You told us the concern is not resolved yet.", meta: { kind: "not_resolved" } }, prefer: "return=minimal" });
-      return res.json({ ok: true, conversation: convOut(r), offer_human: true, reason: "rejected_resolution" });
+      return res.json({ ok: true, conversation: convOut(r) });
     }
     return res.status(400).json({ error: "bad_request" });
   }
 
-  if (a === "handoff" && post) return createHandoff(req, res, b);
-
-  if (a === "cancel" && post) {
-    const c = await ownConversation(v.user.id, b.conversation_id);
-    if (!c || !c.human_sid) return res.status(404).json({ error: "not_found" });
-    if (c.closed_at) return caseClosed(res, c);
-    await closeHumanRoom(c.human_sid, "visitor:" + v.user.id, "customer_cancelled");
-    await audit("visitor:" + v.user.id, "handoff_cancelled_by_customer", {}, { target: c.human_sid, req });
-    return res.json({ ok: true });
-  }
-
-  // Satisfaction feedback for a Human Support case the visitor owns (resolved, ended or closed). Feedback is stored on
-  // the case, never appended to the conversation, so it is allowed after closure. First rating wins (no overwrite).
-  if (a === "feedback" && post) {
-    if (await limited(req, "ai-csat", 10, 3600)) return res.status(429).json({ error: "rate_limited" });
-    const id = String(b.request_id || "");
-    if (!/^HS-[A-Z0-9]{8}$/.test(id)) return res.status(400).json({ error: "bad_request" });
-    const rating = int(b.rating, 1, 5);
-    if (rating === null) return res.status(400).json({ error: "invalid", message: "Choose a rating from 1 to 5." });
-    const cm = cleanText(b.comment, { max: 500, multiline: true, label: "Comment" });
-    if (cm.error) return res.status(400).json({ error: "invalid", message: cm.error });
-    const h = (await sb(`/ai_handoff_requests?id=eq.${q(id)}&user_id=eq.${q(v.user.id)}&select=id,status,assigned_at,assigned_uid,csat_rating`))[0];
-    if (!h) return res.status(404).json({ error: "not_found" }); // also for other visitors' cases
-    if (!h.assigned_at || !["resolved", "closed", "ended"].includes(h.status)) return res.status(409).json({ error: "not_eligible", message: "Feedback opens after an agent has handled your request." });
-    const comment = cm.value ? redactSecrets(cm.value).text : null;
-    const r = (await sb(`/ai_handoff_requests?id=eq.${q(id)}&csat_rating=is.null`, { method: "PATCH", body: { csat_rating: rating, csat_comment: comment, csat_at: new Date().toISOString() }, prefer: "return=representation" }))[0];
-    if (!r) return res.status(409).json({ error: "already_rated" });
-    await audit("visitor:" + v.user.id, "csat_submitted", { rating }, { target: id, req });
-    if (h.assigned_uid) await notifyStaff({ uids: [h.assigned_uid], kind: "csat", title: `Customer rated ${id}: ${rating}/5`, link: `#/handoffs/${id}`, ref: id });
-    return res.json({ ok: true });
-  }
-
-  if (a === "quota" && req.method === "GET") return res.json(await quotaInfo(req, v.user.id));
   return res.status(404).json({ error: "not_found" });
 }, { name: "api/ai" });
