@@ -28,9 +28,13 @@ export default api(async (req, res) => {
   if (await hit("chat-v:" + v.user.id, 30, 60)) return res.status(429).json({ error: "rate_limited" });
 
   const b = jsonBody(req);
-  const t = cleanText(b.text, { max: 2000, multiline: true, label: "Message" });
-  const ocrRaw = cleanText(b.ocr, { max: 1500, multiline: true }).value || "";
-  if (t.error || (!t.value && !ocrRaw)) return res.status(400).json({ error: "bad_request", message: t.error || "Message is empty." });
+  // V6 retry: { retry_of: <user message id> } asks again for the reply to a message that is ALREADY saved
+  // (after a timeout or upstream failure). The message is never stored twice.
+  const retryOf = b.retry_of === undefined || b.retry_of === null ? null : Number(b.retry_of);
+  if (retryOf !== null && !(Number.isInteger(retryOf) && retryOf > 0)) return res.status(400).json({ error: "bad_request" });
+  const t = retryOf ? { value: "" } : cleanText(b.text, { max: 2000, multiline: true, label: "Message" });
+  const ocrRaw = retryOf ? "" : cleanText(b.ocr, { max: 1500, multiline: true }).value || "";
+  if (!retryOf && (t.error || (!t.value && !ocrRaw))) return res.status(400).json({ error: "bad_request", message: t.error || "Message is empty." });
   if (!validConvId(b.conversation_id)) return res.status(400).json({ error: "conversation_required" });
   const c = await ownConversation(v.user.id, b.conversation_id);
   if (!c) return res.status(404).json({ error: "not_found" });
@@ -39,14 +43,22 @@ export default api(async (req, res) => {
   if (!(process.env.GROQ_API_KEY || "").trim()) return res.status(503).json({ error: "not_configured", offer_human: true });
   if (c.owner === "human") return res.status(409).json({ error: "human_owned", sid: c.human_sid }); // AI never answers over a human agent
 
-  // never store or forward credentials as ordinary support content
-  const red = redactSecrets(t.value || "Please review my screenshot."), redOcr = redactSecrets(ocrRaw);
-  const redacted = [...new Set([...red.found, ...redOcr.found])];
-  const body = red.text;
-  const reopenLegacy = c.status === "resolved" || c.status === "closed"; // resolved (not locked) concerns may continue
-  const um = await append(c, v.user.id, "user", body, { ...(redOcr.text ? { ocr: redOcr.text } : {}), ...(redacted.length ? { redacted } : {}) },
-    { title: body.replace(/\s+/g, " ").slice(0, 80), ...(reopenLegacy ? { status: "active" } : {}) });
-  if (!um.ok) return um.reason === "case_closed" ? closed(res, null) : um.reason === "human_owned" ? res.status(409).json({ error: "human_owned", sid: um.sid }) : res.status(404).json({ error: "not_found" });
+  let body, redacted = [], um;
+  if (retryOf) {
+    // only the LATEST user message, and only while it has no reply yet
+    const last = (await sb(`/ai_support_messages?conversation_id=eq.${q(c.id)}&role=in.(user,assistant,agent)&order=id.desc&limit=1&select=id,role,body`))[0];
+    if (!last || last.id !== retryOf || last.role !== "user") return res.status(409).json({ error: "retry_not_needed", message: "This message was already answered." });
+    body = last.body; um = { ok: true, id: last.id };
+  } else {
+    // never store or forward credentials as ordinary support content
+    const red = redactSecrets(t.value || "Please review my screenshot."), redOcr = redactSecrets(ocrRaw);
+    redacted = [...new Set([...red.found, ...redOcr.found])];
+    body = red.text;
+    const reopenLegacy = c.status === "resolved" || c.status === "closed"; // resolved (not locked) concerns may continue
+    um = await append(c, v.user.id, "user", body, { ...(redOcr.text ? { ocr: redOcr.text } : {}), ...(redacted.length ? { redacted } : {}) },
+      { title: body.replace(/\s+/g, " ").slice(0, 80), ...(reopenLegacy ? { status: "active" } : {}) });
+    if (!um.ok) return um.reason === "case_closed" ? closed(res, null) : um.reason === "human_owned" ? res.status(409).json({ error: "human_owned", sid: um.sid }) : res.status(404).json({ error: "not_found" });
+  }
 
   const rows = await sb(`/ai_support_messages?conversation_id=eq.${q(c.id)}&order=id.desc&limit=30&select=role,author,body,meta`);
   const sys = await systemPrompt(rows.filter(r => r.role === "user").slice(0, 3).map(r => r.body).join(" "));
