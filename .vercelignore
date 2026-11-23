@@ -1,7 +1,0 @@
-# Not needed at runtime on Vercel (kept in the repository / ZIP)
-tests/
-docs/
-supabase/
-supabase.sql
-TEST_REPORT.md
-*.log
